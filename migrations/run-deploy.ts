@@ -1,7 +1,3 @@
-// Migrations are an early feature. Currently, they're nothing more than this
-// single deploy script that's invoked from the CLI, injecting a provider
-// configured from the workspace's Anchor.toml.
-
 import * as anchor from '@coral-xyz/anchor';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -64,29 +60,24 @@ async function ensureAssociatedTokenAccount(connection: any, payer: any, owner: 
 async function createTransferHookMint(provider: any, program: any, tokenConfig: any, whitelistOwners: PublicKey[]) {
   const connection = provider.connection;
   const payer = provider.wallet.payer;
-  // 生成新密钥对作为 mint 地址
   const mint = Keypair.generate();
   const mintLen = getMintLen([ExtensionType.TransferHook]);
   const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
-  // 交易包含 3 个指令:
   const createMintTx = new Transaction().add(
-      // 1. 创建账户
-      SystemProgram.createAccount({
+    SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
       newAccountPubkey: mint.publicKey,
       space: mintLen,
       lamports,
       programId: TOKEN_2022_PROGRAM_ID,
     }),
-      // 2. 初始化 Transfer Hook扩展
     createInitializeTransferHookInstruction(
       mint.publicKey,
       payer.publicKey,
       program.programId,
       TOKEN_2022_PROGRAM_ID,
     ),
-      // 3. 初始化 Mint
     createInitializeMintInstruction(
       mint.publicKey,
       tokenConfig.decimals,
@@ -127,24 +118,26 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
     await provider.sendAndConfirm(new Transaction().add(...treasuryInstructions));
   }
 
-  // 初始化 ExtraAccountMetaList
-  //   - 为 Transfer Hook 初始化额外账户元数据列表
-  //   - 这允许在转账时执行自定义逻辑（白名单检查）
-  await program.methods
-    .initializeExtraAccountMetaList()
-    .accounts({
-      mint: mint.publicKey,
-    })
-    .rpc();
+  try {
+    await program.methods
+      .initializeExtraAccountMetaList()
+      .accounts({
+        mint: mint.publicKey,
+      })
+      .rpc();
+  } catch (e: any) {
+    // 如果白名单已存在，跳过初始化
+    if (e.toString().includes('already in use') || e.toString().includes('ConstraintSpace')) {
+      console.log('White list already initialized, skipping...');
+    } else {
+      throw e;
+    }
+  }
 
-
-  // 将部署者 + 白名单所有者都添加到白名单
   const whitelistTokenAccounts = [];
   const ownersToWhitelist = [payer.publicKey, ...whitelistOwners];
 
   for (const owner of ownersToWhitelist) {
-    // 1. 创建 ATA (如果不存在)
-    // 2. 调用程序的 addToWhitelist 方法
     const instructions: any[] = [];
     const tokenAccount = await ensureAssociatedTokenAccount(
       connection,
@@ -173,13 +166,11 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
     });
   }
 
-  // 存储额外账户元数据的 PDA
   const [extraAccountMetaList] = PublicKey.findProgramAddressSync(
     [Buffer.from('extra-account-metas'), mint.publicKey.toBuffer()],
     program.programId,
   );
 
-  // 白名单 PDA (所有 mint 共享)
   const [whiteList] = PublicKey.findProgramAddressSync(
     [Buffer.from('white_list')],
     program.programId,
@@ -222,7 +213,14 @@ function writeDeploymentManifest(clusterName: string, programId: string, deploye
   return outputPath;
 }
 
-export default async (provider: any) => {
+async function main() {
+  const connection = new anchor.web3.Connection(
+    "https://devnet.helius-rpc.com/?api-key=7c8a6828-2b0b-456b-a1fc-f08073e8304a",
+    anchor.AnchorProvider.defaultOptions().commitment
+  );
+  const wallet = anchor.Wallet.local();
+  const provider = new anchor.AnchorProvider(connection, wallet);
+
   console.log('=== Migration script started ===');
   anchor.setProvider(provider);
 
@@ -259,4 +257,6 @@ export default async (provider: any) => {
   console.log(
     'Note: this program uses a single shared white_list PDA for every mint in this deployment.',
   );
-};
+}
+
+main();

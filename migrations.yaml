@@ -1,0 +1,7 @@
+[0]
+  address: BhL8mhnc7Gu5QSajKKWEdZYKn4DLMpv8zKj7xgLDbq37
+  program: transfer_hook
+  idl: target/idl/transfer_hook.json
+
+migration:
+  - ts: migrations/deploy.ts

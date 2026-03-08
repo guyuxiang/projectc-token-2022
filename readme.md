@@ -54,7 +54,7 @@ DrWbQtYJGtsoRwzKqAbHKHKsCJJfpysudF39GBVFSxub
 ### 构建合约
 
 ```bash
-cargo build-spl
+anchor build
 ```
 
 ### 部署

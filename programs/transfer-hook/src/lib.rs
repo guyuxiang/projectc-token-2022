@@ -16,7 +16,7 @@ use spl_tlv_account_resolution::{
 };
 use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 
-declare_id!("DrWbQtYJGtsoRwzKqAbHKHKsCJJfpysudF39GBVFSxub");
+declare_id!("BhL8mhnc7Gu5QSajKKWEdZYKn4DLMpv8zKj7xgLDbq37");
 
 #[error_code]
 pub enum TransferError {
@@ -137,7 +137,7 @@ pub struct InitializeExtraAccountMetaList<'info> {
         seeds = [b"white_list"],
         bump,
         payer = payer,
-        space = WhiteList::space_for_len(0)
+        space = 1000
     )]
     pub white_list: Account<'info, WhiteList>,
 }
@@ -184,13 +184,7 @@ pub struct AddToWhiteList<'info> {
         mut,
         seeds = [b"white_list"],
         bump,
-        realloc = WhiteList::space_for_len(
-            white_list
-                .white_list
-                .len()
-                .checked_add(1)
-                .ok_or(TransferError::WhiteListSizeOverflow)?
-        ),
+        realloc = WhiteList::space_for_len(white_list.white_list.len().saturating_add(10)),
         realloc::payer = signer,
         realloc::zero = false
     )]
