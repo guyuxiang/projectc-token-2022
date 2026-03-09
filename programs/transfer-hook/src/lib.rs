@@ -214,12 +214,15 @@ impl<'info> InitializeExtraAccountMetaList<'info> {
 // These accounts are provided via CPI to this program from the token2022 program
 #[derive(Accounts)]
 pub struct TransferHook<'info> {
-    #[account(token::mint = mint, token::authority = owner)]
+    // During transfer-hook execution this account can be authorized by either the
+    // token owner or a delegate/permanent delegate. The token program has already
+    // verified the signer relationship, so we only constrain the mint here.
+    #[account(token::mint = mint)]
     pub source_token: InterfaceAccount<'info, TokenAccount>,
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(token::mint = mint)]
     pub destination_token: InterfaceAccount<'info, TokenAccount>,
-    /// CHECK: source token account owner, can be SystemAccount or PDA owned by another program
+    /// CHECK: source token authority or delegate, validated by Token-2022 before hook CPI
     pub owner: UncheckedAccount<'info>,
     /// CHECK: ExtraAccountMetaList Account,
     #[account(seeds = [b"extra-account-metas", mint.key().as_ref()], bump)]
