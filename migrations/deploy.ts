@@ -2,31 +2,38 @@
 // single deploy script that's invoked from the CLI, injecting a provider
 // configured from the workspace's Anchor.toml.
 
-import * as anchor from '@coral-xyz/anchor';
+import * as anchor from "@coral-xyz/anchor";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
   createInitializeMintInstruction,
+  createInitializePausableConfigInstruction,
+  createInitializePermanentDelegateInstruction,
   createInitializeTransferHookInstruction,
   createMintToInstruction,
   ExtensionType,
   getAssociatedTokenAddressSync,
   getMintLen,
   TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
-import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
-import fs from 'fs';
-import path from 'path';
+} from "@solana/spl-token";
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
+import fs from "fs";
+import path from "path";
 
 const TOKEN_CONFIGS = [
-  { name: 'Global USD', symbol: 'GLUSD', decimals: 6, initialSupplyUi: 0 },
-  { name: 'Global SGD', symbol: 'GLSGD', decimals: 6, initialSupplyUi: 0 },
+  { name: "Global USD", symbol: "GLUSD", decimals: 6, initialSupplyUi: 0 },
+  { name: "Global SGD", symbol: "GLSGD", decimals: 6, initialSupplyUi: 0 },
 ];
 
 function parseWhitelistOwners() {
-  const raw = process.env.WHITELIST_OWNERS ?? '';
+  const raw = process.env.WHITELIST_OWNERS ?? "";
   return raw
-    .split(',')
+    .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
     .map((value) => new PublicKey(value));
@@ -36,13 +43,19 @@ async function accountExists(connection: any, pubkey: PublicKey) {
   return (await connection.getAccountInfo(pubkey)) !== null;
 }
 
-async function ensureAssociatedTokenAccount(connection: any, payer: any, owner: PublicKey, mint: PublicKey, instructions: any[]) {
+async function ensureAssociatedTokenAccount(
+  connection: any,
+  payer: any,
+  owner: PublicKey,
+  mint: PublicKey,
+  instructions: any[]
+) {
   const ata = getAssociatedTokenAddressSync(
     mint,
     owner,
     false,
     TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
   if (!(await accountExists(connection, ata))) {
@@ -53,47 +66,69 @@ async function ensureAssociatedTokenAccount(connection: any, payer: any, owner: 
         owner,
         mint,
         TOKEN_2022_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      ),
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
     );
   }
 
   return ata;
 }
 
-async function createTransferHookMint(provider: any, program: any, tokenConfig: any, whitelistOwners: PublicKey[]) {
+async function createTransferHookMint(
+  provider: any,
+  program: any,
+  tokenConfig: any,
+  whitelistOwners: PublicKey[]
+) {
   const connection = provider.connection;
   const payer = provider.wallet.payer;
   // 生成新密钥对作为 mint 地址
   const mint = Keypair.generate();
-  const mintLen = getMintLen([ExtensionType.TransferHook]);
+  const mintExtensions = [
+    ExtensionType.TransferHook,
+    ExtensionType.PausableConfig,
+    ExtensionType.PermanentDelegate,
+  ];
+  const mintLen = getMintLen(mintExtensions);
   const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
 
   // 交易包含 3 个指令:
   const createMintTx = new Transaction().add(
-      // 1. 创建账户
-      SystemProgram.createAccount({
+    // 1. 创建账户
+    SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
       newAccountPubkey: mint.publicKey,
       space: mintLen,
       lamports,
       programId: TOKEN_2022_PROGRAM_ID,
     }),
-      // 2. 初始化 Transfer Hook扩展
+    // 2. 初始化 Transfer Hook扩展
     createInitializeTransferHookInstruction(
       mint.publicKey,
       payer.publicKey,
       program.programId,
-      TOKEN_2022_PROGRAM_ID,
+      TOKEN_2022_PROGRAM_ID
     ),
-      // 3. 初始化 Mint
+    // 3. 初始化 Pausable 扩展
+    createInitializePausableConfigInstruction(
+      mint.publicKey,
+      payer.publicKey,
+      TOKEN_2022_PROGRAM_ID
+    ),
+    // 4. 初始化 Permanent Delegate 扩展
+    createInitializePermanentDelegateInstruction(
+      mint.publicKey,
+      payer.publicKey,
+      TOKEN_2022_PROGRAM_ID
+    ),
+    // 5. 初始化 Mint
     createInitializeMintInstruction(
       mint.publicKey,
       tokenConfig.decimals,
       payer.publicKey,
       null,
-      TOKEN_2022_PROGRAM_ID,
-    ),
+      TOKEN_2022_PROGRAM_ID
+    )
   );
 
   await provider.sendAndConfirm(createMintTx, [mint]);
@@ -104,7 +139,7 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
     payer,
     payer.publicKey,
     mint.publicKey,
-    treasuryInstructions,
+    treasuryInstructions
   );
 
   const baseUnits = BigInt(10) ** BigInt(tokenConfig.decimals);
@@ -118,25 +153,26 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
         payer.publicKey,
         initialSupply,
         [],
-        TOKEN_2022_PROGRAM_ID,
-      ),
+        TOKEN_2022_PROGRAM_ID
+      )
     );
   }
 
   if (treasuryInstructions.length > 0) {
-    await provider.sendAndConfirm(new Transaction().add(...treasuryInstructions));
+    await provider.sendAndConfirm(
+      new Transaction().add(...treasuryInstructions)
+    );
   }
 
   // 初始化 ExtraAccountMetaList
   //   - 为 Transfer Hook 初始化额外账户元数据列表
   //   - 这允许在转账时执行自定义逻辑（白名单检查）
-    await program.methods
-      .initializeExtraAccountMetaList()
-      .accounts({
-        mint: mint.publicKey,
-      })
-      .rpc();
-
+  await program.methods
+    .initializeExtraAccountMetaList()
+    .accounts({
+      mint: mint.publicKey,
+    })
+    .rpc();
 
   // 将部署者 + 白名单所有者都添加到白名单
   const whitelistTokenAccounts = [];
@@ -151,7 +187,7 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
       payer,
       owner,
       mint.publicKey,
-      instructions,
+      instructions
     );
 
     if (instructions.length > 0) {
@@ -175,14 +211,14 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
 
   // 存储额外账户元数据的 PDA
   const [extraAccountMetaList] = PublicKey.findProgramAddressSync(
-    [Buffer.from('extra-account-metas'), mint.publicKey.toBuffer()],
-    program.programId,
+    [Buffer.from("extra-account-metas"), mint.publicKey.toBuffer()],
+    program.programId
   );
 
   // 白名单 PDA (所有 mint 共享)
   const [whiteList] = PublicKey.findProgramAddressSync(
-    [Buffer.from('white_list')],
-    program.programId,
+    [Buffer.from("white_list")],
+    program.programId
   );
 
   return {
@@ -191,6 +227,8 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
     decimals: tokenConfig.decimals,
     initialSupplyUi: tokenConfig.initialSupplyUi,
     mint: mint.publicKey.toBase58(),
+    pauseAuthority: payer.publicKey.toBase58(),
+    permanentDelegate: payer.publicKey.toBase58(),
     treasuryTokenAccount: treasuryAta.toBase58(),
     extraAccountMetaList: extraAccountMetaList.toBase58(),
     whiteList: whiteList.toBase58(),
@@ -198,11 +236,15 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
   };
 }
 
-function writeDeploymentManifest(clusterName: string, programId: string, deployedTokens: any[]) {
-  const outputDir = path.join(process.cwd(), 'deployments');
+function writeDeploymentManifest(
+  clusterName: string,
+  programId: string,
+  deployedTokens: any[]
+) {
+  const outputDir = path.join(process.cwd(), "deployments");
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outputPath = path.join(outputDir, `${clusterName}-${timestamp}.json`);
 
   fs.writeFileSync(
@@ -215,48 +257,57 @@ function writeDeploymentManifest(clusterName: string, programId: string, deploye
         tokens: deployedTokens,
       },
       null,
-      2,
-    ),
+      2
+    )
   );
 
   return outputPath;
 }
 
 module.exports = async (provider: any) => {
-  console.log('=== Migration script started ===');
+  console.log("=== Migration script started ===");
   anchor.setProvider(provider);
 
   const program = anchor.workspace.TransferHook;
   const clusterName = provider.connection.rpcEndpoint;
   const whitelistOwners = parseWhitelistOwners();
 
-  console.log('Transfer hook program:', program.programId.toBase58());
-  console.log('Deployer:', provider.wallet.publicKey.toBase58());
+  console.log("Transfer hook program:", program.programId.toBase58());
+  console.log("Deployer:", provider.wallet.publicKey.toBase58());
   console.log(
-    'Whitelist owners:',
+    "Whitelist owners:",
     whitelistOwners.length > 0
-      ? whitelistOwners.map((owner) => owner.toBase58()).join(', ')
-      : '(deployer treasury ATA only)',
+      ? whitelistOwners.map((owner) => owner.toBase58()).join(", ")
+      : "(deployer treasury ATA only)"
   );
 
   const deployedTokens = [];
   for (const tokenConfig of TOKEN_CONFIGS) {
-    const token = await createTransferHookMint(provider, program, tokenConfig, whitelistOwners);
+    const token = await createTransferHookMint(
+      provider,
+      program,
+      tokenConfig,
+      whitelistOwners
+    );
     deployedTokens.push(token);
 
     console.log(`[${token.symbol}] mint: ${token.mint}`);
-    console.log(`[${token.symbol}] treasury ATA: ${token.treasuryTokenAccount}`);
-    console.log(`[${token.symbol}] extra account meta list: ${token.extraAccountMetaList}`);
+    console.log(
+      `[${token.symbol}] treasury ATA: ${token.treasuryTokenAccount}`
+    );
+    console.log(
+      `[${token.symbol}] extra account meta list: ${token.extraAccountMetaList}`
+    );
   }
 
   const manifestPath = writeDeploymentManifest(
-    clusterName.replace(/[^a-zA-Z0-9_-]/g, '_'),
+    clusterName.replace(/[^a-zA-Z0-9_-]/g, "_"),
     program.programId.toBase58(),
-    deployedTokens,
+    deployedTokens
   );
 
-  console.log('Deployment manifest written to:', manifestPath);
+  console.log("Deployment manifest written to:", manifestPath);
   console.log(
-    'Note: this program uses a single shared white_list PDA for every mint in this deployment.',
+    "Note: this program uses a single shared white_list PDA for every mint in this deployment."
   );
 };
