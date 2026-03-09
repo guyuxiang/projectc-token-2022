@@ -130,12 +130,12 @@ async function createTransferHookMint(provider: any, program: any, tokenConfig: 
   // 初始化 ExtraAccountMetaList
   //   - 为 Transfer Hook 初始化额外账户元数据列表
   //   - 这允许在转账时执行自定义逻辑（白名单检查）
-  await program.methods
-    .initializeExtraAccountMetaList()
-    .accounts({
-      mint: mint.publicKey,
-    })
-    .rpc();
+    await program.methods
+      .initializeExtraAccountMetaList()
+      .accounts({
+        mint: mint.publicKey,
+      })
+      .rpc();
 
 
   // 将部署者 + 白名单所有者都添加到白名单
@@ -222,7 +222,7 @@ function writeDeploymentManifest(clusterName: string, programId: string, deploye
   return outputPath;
 }
 
-export default async (provider: any) => {
+module.exports = async (provider: any) => {
   console.log('=== Migration script started ===');
   anchor.setProvider(provider);
 

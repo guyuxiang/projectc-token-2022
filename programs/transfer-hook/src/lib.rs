@@ -16,7 +16,7 @@ use spl_tlv_account_resolution::{
 };
 use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 
-declare_id!("BhL8mhnc7Gu5QSajKKWEdZYKn4DLMpv8zKj7xgLDbq37");
+declare_id!("11111111111111111111111111111111");
 
 #[error_code]
 pub enum TransferError {
@@ -26,6 +26,8 @@ pub enum TransferError {
     WhiteListSizeOverflow,
     #[msg("Account not in white list")]
     AccountNotInWhiteList,
+    #[msg("Account already in white list")]
+    AccountAlreadyInWhiteList,
     #[msg("Unauthorized - only the authority can perform this action")]
     Unauthorized,
 }
@@ -42,8 +44,7 @@ pub mod transfer_hook {
         let is_existing = ctx.accounts.white_list.authority != Pubkey::default();
 
         // 如果已存在，检查权限
-        if is_existing && ctx.accounts.white_list.authority !=
-            ctx.accounts.payer.key() {
+        if is_existing && ctx.accounts.white_list.authority != ctx.accounts.payer.key() {
             return err!(TransferError::Unauthorized);
         }
 
@@ -84,6 +85,18 @@ pub mod transfer_hook {
             return err!(TransferError::Unauthorized);
         }
 
+        if ctx
+            .accounts
+            .white_list
+            .contains(&ctx.accounts.new_account.key())
+        {
+            msg!(
+                "Account already white listed! {0}",
+                ctx.accounts.new_account.key().to_string()
+            );
+            return Ok(());
+        }
+
         ctx.accounts
             .white_list
             .white_list
@@ -91,6 +104,32 @@ pub mod transfer_hook {
         msg!(
             "New account white listed! {0}",
             ctx.accounts.new_account.key().to_string()
+        );
+        msg!(
+            "White list length! {0}",
+            ctx.accounts.white_list.white_list.len()
+        );
+
+        Ok(())
+    }
+
+    pub fn remove_from_whitelist(ctx: Context<RemoveFromWhiteList>) -> Result<()> {
+        if ctx.accounts.white_list.authority != ctx.accounts.signer.key() {
+            return err!(TransferError::Unauthorized);
+        }
+
+        let removed = ctx
+            .accounts
+            .white_list
+            .remove(&ctx.accounts.account_to_remove.key());
+
+        if !removed {
+            return err!(TransferError::AccountNotInWhiteList);
+        }
+
+        msg!(
+            "Account removed from white list! {0}",
+            ctx.accounts.account_to_remove.key().to_string()
         );
         msg!(
             "White list length! {0}",
@@ -114,6 +153,11 @@ fn check_is_transferring(ctx: &Context<TransferHook>) -> Result<()> {
     Ok(())
 }
 
+// WhiteList 结构
+//   - discriminator: 8
+//   - authority: Pubkey: 32
+//   - Vec<Pubkey> 长度前缀: 4
+//   - 1 个白名单地址: 32
 #[derive(Accounts)]
 pub struct InitializeExtraAccountMetaList<'info> {
     #[account(mut)]
@@ -184,7 +228,29 @@ pub struct AddToWhiteList<'info> {
         mut,
         seeds = [b"white_list"],
         bump,
-        realloc = WhiteList::space_for_len(white_list.white_list.len().saturating_add(10)),
+        realloc = white_list
+            .to_account_info()
+            .data_len()
+            .max(white_list.space_after_add(new_account.key())),
+        realloc::payer = signer,
+        realloc::zero = false
+    )]
+    pub white_list: Account<'info, WhiteList>,
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RemoveFromWhiteList<'info> {
+    /// CHECK: Account to remove from white list
+    #[account()]
+    pub account_to_remove: AccountInfo<'info>,
+    #[account(
+        mut,
+        seeds = [b"white_list"],
+        bump,
+        realloc = white_list.to_account_info().data_len(),
         realloc::payer = signer,
         realloc::zero = false
     )]
@@ -210,5 +276,34 @@ impl WhiteList {
             + Self::PUBKEY_LEN
             + Self::VEC_PREFIX_LEN
             + entry_count * Self::PUBKEY_LEN
+    }
+
+    pub fn contains(&self, account: &Pubkey) -> bool {
+        self.white_list.contains(account)
+    }
+
+    pub fn space_after_add(&self, account: Pubkey) -> usize {
+        if self.contains(&account) {
+            Self::space_for_len(self.white_list.len())
+        } else {
+            Self::space_for_len(self.white_list.len().saturating_add(1))
+        }
+    }
+
+    pub fn space_after_remove(&self, account: Pubkey) -> usize {
+        if self.contains(&account) {
+            Self::space_for_len(self.white_list.len().saturating_sub(1))
+        } else {
+            Self::space_for_len(self.white_list.len())
+        }
+    }
+
+    pub fn remove(&mut self, account: &Pubkey) -> bool {
+        if let Some(index) = self.white_list.iter().position(|entry| entry == account) {
+            self.white_list.swap_remove(index);
+            true
+        } else {
+            false
+        }
     }
 }

@@ -1,5 +1,6 @@
 import type { Program } from '@coral-xyz/anchor';
 import * as anchor from '@coral-xyz/anchor';
+import { expect } from 'chai';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
@@ -12,7 +13,7 @@ import {
   getMintLen,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
-import { Keypair, SystemProgram, sendAndConfirmTransaction, Transaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram, sendAndConfirmTransaction, Transaction } from '@solana/web3.js';
 import type { TransferHook } from '../target/types/transfer_hook';
 
 describe('transfer-hook', () => {
@@ -46,6 +47,15 @@ describe('transfer-hook', () => {
     TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
   );
+
+  const [whiteListPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from('white_list')],
+    program.programId,
+  );
+
+  const fetchWhiteList = async () => {
+    return program.account.whiteList.fetch(whiteListPda);
+  };
 
   it('Create Mint Account with Transfer Hook Extension', async () => {
     const extensions = [ExtensionType.TransferHook];
@@ -136,6 +146,24 @@ describe('transfer-hook', () => {
     console.log('White Listed:', txSig);
   });
 
+  it('Duplicate whitelist insert is ignored', async () => {
+    const addAccountToWhiteListInstruction = await program.methods
+      .addToWhitelist()
+      .accounts({
+        newAccount: destinationTokenAccount,
+        signer: wallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const transaction = new Transaction().add(addAccountToWhiteListInstruction);
+    await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
+
+    const whiteList = await fetchWhiteList();
+    const matches = whiteList.whiteList.filter((account: PublicKey) => account.equals(destinationTokenAccount));
+    expect(matches).to.have.length(1);
+  });
+
   it('Transfer Hook with Extra Account Meta', async () => {
     // 1 tokens
     const amount = 1 * 10 ** decimals;
@@ -159,5 +187,53 @@ describe('transfer-hook', () => {
 
     const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
     console.log('Transfer Checked:', txSig);
+  });
+
+  it('Remove account from white list', async () => {
+    const removeFromWhiteListInstruction = await (program.methods as any)
+      .removeFromWhitelist()
+      .accounts({
+        accountToRemove: destinationTokenAccount,
+        signer: wallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const transaction = new Transaction().add(removeFromWhiteListInstruction);
+    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
+    console.log('Removed from white list:', txSig);
+
+    const whiteList = await fetchWhiteList();
+    const matches = whiteList.whiteList.filter((account: PublicKey) => account.equals(destinationTokenAccount));
+    expect(matches).to.have.length(0);
+  });
+
+  it('Transfer fails after whitelist removal', async () => {
+    const amount = 1 * 10 ** decimals;
+    const bigIntAmount = BigInt(amount);
+
+    const transferInstruction = await createTransferCheckedWithTransferHookInstruction(
+      connection,
+      sourceTokenAccount,
+      mint.publicKey,
+      destinationTokenAccount,
+      wallet.publicKey,
+      bigIntAmount,
+      decimals,
+      [],
+      'confirmed',
+      TOKEN_2022_PROGRAM_ID,
+    );
+
+    const transaction = new Transaction().add(transferInstruction);
+
+    let threw = false;
+    try {
+      await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
+    } catch (error) {
+      threw = true;
+    }
+
+    expect(threw).to.equal(true);
   });
 });
