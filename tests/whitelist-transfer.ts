@@ -1,5 +1,6 @@
-import type { Program } from '@coral-xyz/anchor';
-import * as anchor from '@coral-xyz/anchor';
+import type { Program } from "@coral-xyz/anchor";
+import * as anchor from "@coral-xyz/anchor";
+import { expect } from "chai";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   createAssociatedTokenAccountInstruction,
@@ -7,11 +8,17 @@ import {
   createTransferCheckedWithTransferHookInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
-import { Keypair, SystemProgram, sendAndConfirmTransaction, Transaction, PublicKey } from '@solana/web3.js';
-import type { TransferHook } from '../target/types/transfer_hook';
+} from "@solana/spl-token";
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
+import type { TransferHook } from "../target/types/transfer_hook";
 
-describe('transfer-hook-whitelist-test', () => {
+describe("transfer-hook whitelist transfer on devnet", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
@@ -19,146 +26,204 @@ describe('transfer-hook-whitelist-test', () => {
   const wallet = provider.wallet as anchor.Wallet;
   const connection = provider.connection;
 
-  // ============ 配置项 ============
-  // GLUSD Mint 地址 (测试网)
-  const GLUSD_MINT = new PublicKey('GlUsD1L2V9GqjdPCJ8q股票3kQ5M8tY2'); // TODO: 替换为实际的 GLUSD Mint 地址
-  const decimals = 9;
+  const GLUSD_MINT = new PublicKey(
+    "7vyurtkGpjwmi4gmbWuPZHCTamqkDZrP1A6GAeDMMukR"
+  );
+  const DECIMALS = 6;
+  const MINT_AMOUNT_UI = 1_000_000;
+  const TRANSFER_AMOUNT_UI = 50_000;
+  const MINT_AMOUNT = BigInt(MINT_AMOUNT_UI) * 10n ** BigInt(DECIMALS);
+  const TRANSFER_AMOUNT = BigInt(TRANSFER_AMOUNT_UI) * 10n ** BigInt(DECIMALS);
 
-  // 用户 A (发送方) - 使用当前钱包
   const userA = wallet.publicKey;
-
-  // 用户 B (接收方) - 生成一个新密钥对
   const userB = Keypair.generate();
+  const userC = Keypair.generate();
 
-  // 用户 A 的代币账户
   const userATokenAccount = getAssociatedTokenAddressSync(
     GLUSD_MINT,
     userA,
     false,
     TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
-  // 用户 B 的代币账户
   const userBTokenAccount = getAssociatedTokenAddressSync(
     GLUSD_MINT,
     userB.publicKey,
     false,
     TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
-  it('1. 为用户 B 创建代币账户', async () => {
+  const userCTokenAccount = getAssociatedTokenAddressSync(
+    GLUSD_MINT,
+    userC.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+
+  async function createAtaIfNeeded(owner: PublicKey, tokenAccount: PublicKey) {
+    const accountInfo = await connection.getAccountInfo(
+      tokenAccount,
+      "confirmed"
+    );
+    if (accountInfo) {
+      return;
+    }
+
     const transaction = new Transaction().add(
       createAssociatedTokenAccountInstruction(
         wallet.publicKey,
-        userBTokenAccount,
-        userB.publicKey,
+        tokenAccount,
+        owner,
         GLUSD_MINT,
         TOKEN_2022_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      ),
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
     );
 
-    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
-    console.log(`创建用户 B 代币账户: ${txSig}`);
-    console.log(`用户 B 地址: ${userB.publicKey.toBase58()}`);
-    console.log(`用户 B 代币账户: ${userBTokenAccount.toBase58()}`);
-  });
+    await sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
+      skipPreflight: true,
+      commitment: "confirmed",
+    });
+  }
 
-  it('2. 初始化 ExtraAccountMetaList (设置白名单功能)', async () => {
-    const initializeExtraAccountMetaListInstruction = await program.methods
-      .initializeExtraAccountMetaList()
-      .accounts({
-        mint: GLUSD_MINT,
-      })
-      .instruction();
+  async function addToWhitelist(tokenAccount: PublicKey) {
+    const transaction = new Transaction().add(
+      await program.methods
+        .addToWhitelist()
+        .accounts({
+          newAccount: tokenAccount,
+          signer: wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction()
+    );
 
-    const transaction = new Transaction().add(initializeExtraAccountMetaListInstruction);
-    const txSig = await sendAndConfirmTransaction(provider.connection, transaction, [wallet.payer], { skipPreflight: true, commitment: 'confirmed' });
+    await sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
+      skipPreflight: true,
+      commitment: "confirmed",
+    });
+  }
 
-    console.log(`初始化 ExtraAccountMetaList: ${txSig}`);
-  });
-
-  it('3. 将用户 A 添加到白名单', async () => {
-    const addAccountToWhiteListInstruction = await program.methods
-      .addToWhitelist()
-      .accounts({
-        newAccount: userATokenAccount,
-        signer: wallet.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const transaction = new Transaction().add(addAccountToWhiteListInstruction);
-    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
-
-    console.log(`用户 A 添加到白名单: ${txSig}`);
-    console.log(`用户 A 代币账户: ${userATokenAccount.toBase58()}`);
-  });
-
-  it('4. 将用户 B 添加到白名单', async () => {
-    const addAccountToWhiteListInstruction = await program.methods
-      .addToWhitelist()
-      .accounts({
-        newAccount: userBTokenAccount,
-        signer: wallet.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const transaction = new Transaction().add(addAccountToWhiteListInstruction);
-    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
-
-    console.log(`用户 B 添加到白名单: ${txSig}`);
-  });
-
-  it('5. 发行 1000 GLUSD 给用户 A (Mint To)', async () => {
-    const amount = 1000 * 10 ** decimals;
-
+  async function mintToA() {
     const transaction = new Transaction().add(
       createMintToInstruction(
         GLUSD_MINT,
         userATokenAccount,
         wallet.publicKey,
-        amount,
+        MINT_AMOUNT,
         [],
-        TOKEN_2022_PROGRAM_ID,
-      ),
+        TOKEN_2022_PROGRAM_ID
+      )
     );
 
-    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
-    console.log(`发行 1000 GLUSD 给用户 A: ${txSig}`);
-  });
+    await sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
+      skipPreflight: true,
+      commitment: "confirmed",
+    });
+  }
 
-  it('6. 用户 A 转账 500 GLUSD 给用户 B', async () => {
-    const amount = 500 * 10 ** decimals;
-    const bigIntAmount = BigInt(amount);
-
-    const transferInstruction = await createTransferCheckedWithTransferHookInstruction(
+  async function transferFromATo(destination: PublicKey) {
+    const instruction = await createTransferCheckedWithTransferHookInstruction(
       connection,
       userATokenAccount,
       GLUSD_MINT,
-      userBTokenAccount,
+      destination,
       wallet.publicKey,
-      bigIntAmount,
-      decimals,
+      TRANSFER_AMOUNT,
+      DECIMALS,
       [],
-      'confirmed',
-      TOKEN_2022_PROGRAM_ID,
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID
     );
 
-    const transaction = new Transaction().add(transferInstruction);
-    const txSig = await sendAndConfirmTransaction(connection, transaction, [wallet.payer], { skipPreflight: true });
+    const transaction = new Transaction().add(instruction);
+    return sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
+      skipPreflight: true,
+      commitment: "confirmed",
+    });
+  }
 
-    console.log(`用户 A 转账 500 GLUSD 给用户 B: ${txSig}`);
+  async function getTokenAmount(tokenAccount: PublicKey): Promise<bigint> {
+    const balance = await connection.getTokenAccountBalance(
+      tokenAccount,
+      "confirmed"
+    );
+    return BigInt(balance.value.amount);
+  }
+
+  it("creates ATA for A, B and C", async () => {
+    await createAtaIfNeeded(userA, userATokenAccount);
+    await createAtaIfNeeded(userB.publicKey, userBTokenAccount);
+    await createAtaIfNeeded(userC.publicKey, userCTokenAccount);
+
+    expect(
+      await connection.getAccountInfo(userATokenAccount, "confirmed")
+    ).to.not.equal(null);
+    expect(
+      await connection.getAccountInfo(userBTokenAccount, "confirmed")
+    ).to.not.equal(null);
+    expect(
+      await connection.getAccountInfo(userCTokenAccount, "confirmed")
+    ).to.not.equal(null);
+
+    console.log(`userA: ${userA.toBase58()}`);
+    console.log(`userA ATA: ${userATokenAccount.toBase58()}`);
+    console.log(`userB: ${userB.publicKey.toBase58()}`);
+    console.log(`userB ATA: ${userBTokenAccount.toBase58()}`);
+    console.log(`userC: ${userC.publicKey.toBase58()}`);
+    console.log(`userC ATA: ${userCTokenAccount.toBase58()}`);
   });
 
-  it('7. 验证余额', async () => {
-    const userABalance = await connection.getTokenAccountBalance(userATokenAccount, 'confirmed');
-    const userBBalance = await connection.getTokenAccountBalance(userBTokenAccount, 'confirmed');
+  it("adds A and B token accounts to the whitelist", async () => {
+    await addToWhitelist(userATokenAccount);
+    await addToWhitelist(userBTokenAccount);
+  });
 
-    console.log(`用户 A 余额: ${userABalance.value.uiAmountString} GLUSD`);
-    console.log(`用户 B 余额: ${userBBalance.value.uiAmountString} GLUSD`);
+  it(`mints ${MINT_AMOUNT_UI.toLocaleString()} GLUSD to A`, async () => {
+    const before = await getTokenAmount(userATokenAccount);
+    await mintToA();
+    const after = await getTokenAmount(userATokenAccount);
+
+    expect(after - before).to.equal(MINT_AMOUNT);
+    console.log(`minted to A: ${MINT_AMOUNT_UI} GLUSD`);
+  });
+
+  it(`transfers ${TRANSFER_AMOUNT_UI.toLocaleString()} GLUSD from A to B`, async () => {
+    const aBefore = await getTokenAmount(userATokenAccount);
+    const bBefore = await getTokenAmount(userBTokenAccount);
+
+    const txSig = await transferFromATo(userBTokenAccount);
+
+    const aAfter = await getTokenAmount(userATokenAccount);
+    const bAfter = await getTokenAmount(userBTokenAccount);
+
+    expect(aBefore - aAfter).to.equal(TRANSFER_AMOUNT);
+    expect(bAfter - bBefore).to.equal(TRANSFER_AMOUNT);
+    console.log(`A -> B transfer signature: ${txSig}`);
+  });
+
+  it(`fails to transfer ${TRANSFER_AMOUNT_UI.toLocaleString()} GLUSD from A to C`, async () => {
+    const aBefore = await getTokenAmount(userATokenAccount);
+    const cBefore = await getTokenAmount(userCTokenAccount);
+
+    let threw = false;
+    try {
+      await transferFromATo(userCTokenAccount);
+    } catch (error: any) {
+      threw = true;
+      console.log(
+        `A -> C transfer rejected as expected: ${error?.message ?? error}`
+      );
+    }
+
+    const aAfter = await getTokenAmount(userATokenAccount);
+    const cAfter = await getTokenAmount(userCTokenAccount);
+
+    expect(threw).to.equal(true);
+    expect(aAfter).to.equal(aBefore);
+    expect(cAfter).to.equal(cBefore);
   });
 });
