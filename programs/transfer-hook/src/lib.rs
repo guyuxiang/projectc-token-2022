@@ -16,7 +16,7 @@ use spl_tlv_account_resolution::{
 };
 use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 
-declare_id!("B6zKa3LBfyfRCMZmPbHyvxZ4F7W674XJ9ptnoVrojprK");
+declare_id!("G9wSn2sj6Ki5gc4D7AXAqgrPQdijGE1keXHKpMQFCdak");
 
 #[error_code]
 pub enum TransferError {
