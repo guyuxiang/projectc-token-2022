@@ -111,8 +111,9 @@ pub mod transfer_hook {
             .white_list
             .push(ctx.accounts.new_account.key());
         msg!(
-            "New account white listed! {0}",
-            ctx.accounts.new_account.key().to_string()
+            "EVENT:WhitelistAdded account={} authority={}",
+            ctx.accounts.new_account.key(),
+            ctx.accounts.signer.key()
         );
         msg!(
             "White list length! {0}",
@@ -137,8 +138,9 @@ pub mod transfer_hook {
         }
 
         msg!(
-            "Account removed from white list! {0}",
-            ctx.accounts.account_to_remove.key().to_string()
+            "EVENT:WhitelistRemoved account={} authority={}",
+            ctx.accounts.account_to_remove.key(),
+            ctx.accounts.signer.key()
         );
         msg!(
             "White list length! {0}",
