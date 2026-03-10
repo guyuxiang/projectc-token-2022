@@ -5,7 +5,7 @@ seeds = false
 skip-lint = false
 
 [programs.devnet]
-transfer_hook = "G9wSn2sj6Ki5gc4D7AXAqgrPQdijGE1keXHKpMQFCdak"
+transfer_hook = "5LMLujHtNx4VARPXPAUveyRVoMbhmQyM36sasbieoJLw"
 
 [registry]
 url = "https://api.apr.dev"

@@ -158,7 +158,7 @@ anchor migrate
 ### 运行全部测试
 
 ```bash
-anchor test
+anchor test --skip-local-validator --skip-build --skip-deploy --run tests/transfer-hook.ts
 ```
 
 注意：

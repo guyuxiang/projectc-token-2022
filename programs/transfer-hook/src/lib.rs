@@ -1,183 +1,28 @@
-use std::cell::RefMut;
-
 use anchor_lang::prelude::*;
-use anchor_spl::{
-    token_2022::spl_token_2022::{
-        extension::{
-            transfer_hook::TransferHookAccount, BaseStateWithExtensionsMut,
-            PodStateWithExtensionsMut,
-        },
-        pod::PodAccount,
-    },
-    token_interface::{Mint, TokenAccount},
-};
+use anchor_spl::token_interface::{Mint, TokenAccount};
 use spl_tlv_account_resolution::{
     account::ExtraAccountMeta, seeds::Seed, state::ExtraAccountMetaList,
 };
-use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 
-declare_id!("G9wSn2sj6Ki5gc4D7AXAqgrPQdijGE1keXHKpMQFCdak");
+pub mod constants;
+pub mod error;
+pub mod instructions;
+pub mod state;
 
-#[error_code]
-pub enum TransferError {
-    #[msg("The token is not currently transferring")]
-    IsNotCurrentlyTransferring,
-    #[msg("The new whitelist size overflows")]
-    WhiteListSizeOverflow,
-    #[msg("Account not in white list")]
-    AccountNotInWhiteList,
-    #[msg("Account already in white list")]
-    AccountAlreadyInWhiteList,
-    #[msg("Unauthorized - only the authority can perform this action")]
-    Unauthorized,
-}
+use constants::{EXTRA_ACCOUNT_METAS_SEED, WHITE_LIST_SEED};
+use state::WhiteList;
 
-#[program]
-pub mod transfer_hook {
-    use super::*;
+declare_id!("5LMLujHtNx4VARPXPAUveyRVoMbhmQyM36sasbieoJLw");
 
-    #[interface(spl_transfer_hook_interface::initialize_extra_account_meta_list)]
-    pub fn initialize_extra_account_meta_list(
-        ctx: Context<InitializeExtraAccountMetaList>,
-    ) -> Result<()> {
-        // 判断 white_list 是否已存在（authority 不为零）
-        let is_existing = ctx.accounts.white_list.authority != Pubkey::default();
-
-        // 如果已存在，检查权限
-        if is_existing && ctx.accounts.white_list.authority != ctx.accounts.payer.key() {
-            return err!(TransferError::Unauthorized);
-        }
-
-        // set authority field on white_list account as payer address
-        ctx.accounts.white_list.authority = ctx.accounts.payer.key();
-
-        let extra_account_metas = InitializeExtraAccountMetaList::extra_account_metas()?;
-
-        // initialize ExtraAccountMetaList account with extra accounts
-        ExtraAccountMetaList::init::<ExecuteInstruction>(
-            &mut ctx.accounts.extra_account_meta_list.try_borrow_mut_data()?,
-            &extra_account_metas,
-        )?;
-        Ok(())
-    }
-
-    #[interface(spl_transfer_hook_interface::execute)]
-    pub fn transfer_hook(ctx: Context<TransferHook>, _amount: u64) -> Result<()> {
-        // Fail this instruction if it is not called from within a transfer hook
-        check_is_transferring(&ctx)?;
-
-        if !ctx
-            .accounts
-            .white_list
-            .white_list
-            .contains(&ctx.accounts.source_token.key())
-        {
-            return err!(TransferError::AccountNotInWhiteList);
-        }
-
-        if !ctx
-            .accounts
-            .white_list
-            .white_list
-            .contains(&ctx.accounts.destination_token.key())
-        {
-            return err!(TransferError::AccountNotInWhiteList);
-        }
-
-        msg!("Account in white list, all good!");
-
-        Ok(())
-    }
-
-    pub fn add_to_whitelist(ctx: Context<AddToWhiteList>) -> Result<()> {
-        if ctx.accounts.white_list.authority != ctx.accounts.signer.key() {
-            return err!(TransferError::Unauthorized);
-        }
-
-        if ctx
-            .accounts
-            .white_list
-            .contains(&ctx.accounts.new_account.key())
-        {
-            msg!(
-                "Account already white listed! {0}",
-                ctx.accounts.new_account.key().to_string()
-            );
-            return Ok(());
-        }
-
-        ctx.accounts
-            .white_list
-            .white_list
-            .push(ctx.accounts.new_account.key());
-        msg!(
-            "EVENT:WhitelistAdded account={} authority={}",
-            ctx.accounts.new_account.key(),
-            ctx.accounts.signer.key()
-        );
-        msg!(
-            "White list length! {0}",
-            ctx.accounts.white_list.white_list.len()
-        );
-
-        Ok(())
-    }
-
-    pub fn remove_from_whitelist(ctx: Context<RemoveFromWhiteList>) -> Result<()> {
-        if ctx.accounts.white_list.authority != ctx.accounts.signer.key() {
-            return err!(TransferError::Unauthorized);
-        }
-
-        let removed = ctx
-            .accounts
-            .white_list
-            .remove(&ctx.accounts.account_to_remove.key());
-
-        if !removed {
-            return err!(TransferError::AccountNotInWhiteList);
-        }
-
-        msg!(
-            "EVENT:WhitelistRemoved account={} authority={}",
-            ctx.accounts.account_to_remove.key(),
-            ctx.accounts.signer.key()
-        );
-        msg!(
-            "White list length! {0}",
-            ctx.accounts.white_list.white_list.len()
-        );
-
-        Ok(())
-    }
-}
-
-fn check_is_transferring(ctx: &Context<TransferHook>) -> Result<()> {
-    let source_token_info = ctx.accounts.source_token.to_account_info();
-    let mut account_data_ref: RefMut<&mut [u8]> = source_token_info.try_borrow_mut_data()?;
-    let mut account = PodStateWithExtensionsMut::<PodAccount>::unpack(*account_data_ref)?;
-    let account_extension = account.get_extension_mut::<TransferHookAccount>()?;
-
-    if !bool::from(account_extension.transferring) {
-        return err!(TransferError::IsNotCurrentlyTransferring);
-    }
-
-    Ok(())
-}
-
-// WhiteList 结构
-//   - discriminator: 8
-//   - authority: Pubkey: 32
-//   - Vec<Pubkey> 长度前缀: 4
-//   - 1 个白名单地址: 32
 #[derive(Accounts)]
 pub struct InitializeExtraAccountMetaList<'info> {
     #[account(mut)]
-    payer: Signer<'info>,
+    pub payer: Signer<'info>,
 
-    /// CHECK: ExtraAccountMetaList Account, must use these seeds
+    /// CHECK: ExtraAccountMetaList account derived from mint
     #[account(
         init,
-        seeds = [b"extra-account-metas", mint.key().as_ref()],
+        seeds = [EXTRA_ACCOUNT_METAS_SEED, mint.key().as_ref()],
         bump,
         space = ExtraAccountMetaList::size_of(
             InitializeExtraAccountMetaList::extra_account_metas()?.len()
@@ -189,7 +34,7 @@ pub struct InitializeExtraAccountMetaList<'info> {
     pub system_program: Program<'info, System>,
     #[account(
         init_if_needed,
-        seeds = [b"white_list"],
+        seeds = [WHITE_LIST_SEED],
         bump,
         payer = payer,
         space = 1000
@@ -197,39 +42,31 @@ pub struct InitializeExtraAccountMetaList<'info> {
     pub white_list: Account<'info, WhiteList>,
 }
 
-// Define extra account metas to store on extra_account_meta_list account
 impl<'info> InitializeExtraAccountMetaList<'info> {
     pub fn extra_account_metas() -> Result<Vec<ExtraAccountMeta>> {
         Ok(vec![ExtraAccountMeta::new_with_seeds(
             &[Seed::Literal {
-                bytes: "white_list".as_bytes().to_vec(),
+                bytes: WHITE_LIST_SEED.to_vec(),
             }],
-            false, // is_signer
-            true,  // is_writable
+            false,
+            true,
         )?])
     }
 }
 
-// Order of accounts matters for this struct.
-// The first 4 accounts are the accounts required for token transfer (source, mint, destination, owner)
-// Remaining accounts are the extra accounts required from the ExtraAccountMetaList account
-// These accounts are provided via CPI to this program from the token2022 program
 #[derive(Accounts)]
 pub struct TransferHook<'info> {
-    // During transfer-hook execution this account can be authorized by either the
-    // token owner or a delegate/permanent delegate. The token program has already
-    // verified the signer relationship, so we only constrain the mint here.
     #[account(token::mint = mint)]
     pub source_token: InterfaceAccount<'info, TokenAccount>,
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(token::mint = mint)]
     pub destination_token: InterfaceAccount<'info, TokenAccount>,
-    /// CHECK: source token authority or delegate, validated by Token-2022 before hook CPI
+    /// CHECK: Source token authority or delegate, validated by Token-2022 before hook CPI
     pub owner: UncheckedAccount<'info>,
-    /// CHECK: ExtraAccountMetaList Account,
-    #[account(seeds = [b"extra-account-metas", mint.key().as_ref()], bump)]
+    /// CHECK: ExtraAccountMetaList account derived from mint
+    #[account(seeds = [EXTRA_ACCOUNT_METAS_SEED, mint.key().as_ref()], bump)]
     pub extra_account_meta_list: UncheckedAccount<'info>,
-    #[account(seeds = [b"white_list"], bump)]
+    #[account(seeds = [WHITE_LIST_SEED], bump)]
     pub white_list: Account<'info, WhiteList>,
 }
 
@@ -240,7 +77,7 @@ pub struct AddToWhiteList<'info> {
     pub new_account: AccountInfo<'info>,
     #[account(
         mut,
-        seeds = [b"white_list"],
+        seeds = [WHITE_LIST_SEED],
         bump,
         realloc = white_list
             .to_account_info()
@@ -262,7 +99,7 @@ pub struct RemoveFromWhiteList<'info> {
     pub account_to_remove: AccountInfo<'info>,
     #[account(
         mut,
-        seeds = [b"white_list"],
+        seeds = [WHITE_LIST_SEED],
         bump,
         realloc = white_list.to_account_info().data_len(),
         realloc::payer = signer,
@@ -274,50 +111,27 @@ pub struct RemoveFromWhiteList<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[account]
-pub struct WhiteList {
-    pub authority: Pubkey,
-    pub white_list: Vec<Pubkey>,
-}
+#[program]
+pub mod transfer_hook {
+    use super::*;
 
-impl WhiteList {
-    pub const DISCRIMINATOR_LEN: usize = 8;
-    pub const PUBKEY_LEN: usize = 32;
-    pub const VEC_PREFIX_LEN: usize = 4;
-
-    pub fn space_for_len(entry_count: usize) -> usize {
-        Self::DISCRIMINATOR_LEN
-            + Self::PUBKEY_LEN
-            + Self::VEC_PREFIX_LEN
-            + entry_count * Self::PUBKEY_LEN
+    #[interface(spl_transfer_hook_interface::initialize_extra_account_meta_list)]
+    pub fn initialize_extra_account_meta_list(
+        ctx: Context<InitializeExtraAccountMetaList>,
+    ) -> Result<()> {
+        crate::instructions::initialize_extra_account_meta_list::handler(ctx)
     }
 
-    pub fn contains(&self, account: &Pubkey) -> bool {
-        self.white_list.contains(account)
+    #[interface(spl_transfer_hook_interface::execute)]
+    pub fn transfer_hook(ctx: Context<TransferHook>, amount: u64) -> Result<()> {
+        crate::instructions::transfer_hook::handler(ctx, amount)
     }
 
-    pub fn space_after_add(&self, account: Pubkey) -> usize {
-        if self.contains(&account) {
-            Self::space_for_len(self.white_list.len())
-        } else {
-            Self::space_for_len(self.white_list.len().saturating_add(1))
-        }
+    pub fn add_to_whitelist(ctx: Context<AddToWhiteList>) -> Result<()> {
+        crate::instructions::add_to_whitelist::handler(ctx)
     }
 
-    pub fn space_after_remove(&self, account: Pubkey) -> usize {
-        if self.contains(&account) {
-            Self::space_for_len(self.white_list.len().saturating_sub(1))
-        } else {
-            Self::space_for_len(self.white_list.len())
-        }
-    }
-
-    pub fn remove(&mut self, account: &Pubkey) -> bool {
-        if let Some(index) = self.white_list.iter().position(|entry| entry == account) {
-            self.white_list.swap_remove(index);
-            true
-        } else {
-            false
-        }
+    pub fn remove_from_whitelist(ctx: Context<RemoveFromWhiteList>) -> Result<()> {
+        crate::instructions::remove_from_whitelist::handler(ctx)
     }
 }
