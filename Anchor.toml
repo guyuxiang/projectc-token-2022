@@ -7,6 +7,8 @@ skip-lint = false
 [programs.devnet]
 transfer_hook = "BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3"
 whitelist_manager = "63YybmV5S1uZdPoXRCUHP5LR34maufSGW4bNaT2GmLMj"
+business_id_factory = "35y1BTgc6QzvGYL6raYNJJf6j136ZfQcssWHKKr8rCRf"
+stablecoin_ramp = "7Yh27as26FVuh5Hqeq9EpwyKUukiu5RKcgtPsqXrEVeg"
 
 [registry]
 url = "https://api.apr.dev"

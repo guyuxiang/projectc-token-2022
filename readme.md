@@ -1,65 +1,89 @@
-# Token-2022 Transfer Hook
+# Token-2022 Transfer Hook + Stablecoin Ramp
 
-基于 Solana Anchor 的 SPL Token-2022 示例项目，当前实现了三种 mint extension 的组合：
+基于 Solana Anchor 的 Token-2022 业务示例，当前包含四个独立 program：
 
-- `TransferHook`
-- `PausableConfig`
-- `PermanentDelegate`
+- `transfer-hook`
+- `whitelist-manager`
+- `business-id-factory`
+- `stablecoin-ramp`
 
-项目核心目标是对 Token-2022 转账做白名单校验，并验证暂停、恢复、永久代理转账/销毁等能力。
+这套实现同时覆盖两类能力：
 
-## 当前状态
+- Token-2022 转账白名单控制
+- 稳定币 on-ramp / off-ramp 业务流转与业务 ID 生成
 
-- `transfer_hook` Program ID: `5LMLujHtNx4VARPXPAUveyRVoMbhmQyM36sasbieoJLw`
-- `whitelist_manager` Program ID: `CYowkEpLGViioLpF1QcnS8ZJXi1GUtwPNVCZ2PnkD2bj`
-- Anchor 版本: `0.32.1`
-- Token Program: `TOKEN_2022_PROGRAM_ID`
-- 默认网络配置: devnet
+## 当前 Program ID
 
-## 功能特性
+- `transfer_hook`: `BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3`
+- `whitelist_manager`: `63YybmV5S1uZdPoXRCUHP5LR34maufSGW4bNaT2GmLMj`
+- `business_id_factory`: `35y1BTgc6QzvGYL6raYNJJf6j136ZfQcssWHKKr8rCRf`
+- `stablecoin_ramp`: `7Yh27as26FVuh5Hqeq9EpwyKUukiu5RKcgtPsqXrEVeg`
 
-- `TransferHook`: Token-2022 转账时自动回调本程序执行白名单校验
-- 双边白名单校验: 发送方 ATA 和接收方 ATA 都必须在白名单中
-- 独立白名单程序: 白名单管理从 `transfer-hook` 中拆分到 `whitelist-manager`
-- 多 mint 复用: 多个 mint 可以绑定同一个共享白名单 PDA
-- `PausableConfig`: 支持暂停与恢复 token 转账
-- `PermanentDelegate`: 永久代理可以在没有 owner approval 的情况下执行转账和销毁
-- `MintTo`: 迁移脚本可创建新 mint，并输出 deployment manifest
+## 架构说明
 
-## 当前白名单设计
+### 1. `whitelist-manager`
 
-当前白名单由独立程序 `whitelist-manager` 负责维护。
+负责维护共享白名单 PDA：
 
-共享白名单 PDA 规则：
-
-- program: `whitelist_manager`
 - seeds: `["white_list", authority]`
-- 同一个 authority 名下的多个 mint 可以共享同一个白名单账户
-- 白名单存储的是 token account 地址，而不是 wallet owner
+- 可被多个 mint 复用
+- 当前白名单既存 wallet pubkey，也存 token account pubkey
+
+用途分两类：
+
+- `stablecoin-ramp` 校验 wallet 是否允许发起 on/off ramp
+- `transfer-hook` 校验 source ATA / destination ATA 是否允许转账
+
+### 2. `transfer-hook`
+
+用于 Token-2022 的转账回调校验：
+
+- 每个 mint 都会初始化 `ExtraAccountMetaList`
+- 额外依赖外部共享 `white_list` 账户
+- 转账时要求 source ATA 和 destination ATA 同时在白名单中
+
+### 3. `business-id-factory`
+
+用于生成业务 ID。
+
+当前逻辑：
+
+- 维护 `FactoryState`
+- 按 `日期 + token symbol + request type` 递增序列
+- 生成格式：`YYYYMMDDHHMMSS + SYMBOL + ONRAMP/OFFRAMP + sequence`
+- `BusinessIdRecord` 现在是固定 PDA：`["business-id-record"]`
+- 每次生成新业务号时，都会覆盖重写同一个 `BusinessIdRecord`
+
+注意：
+
+- `BusinessIdRecord` 只代表“最近一次生成的业务 ID”
+- 历史业务号不保存在这个账户中
+- 历史业务号要看 `stablecoin-ramp` 的 `RampRequest.business_id`
+
+### 4. `stablecoin-ramp`
+
+用于 on-ramp / off-ramp 请求流转。
+
+主要能力：
+
+- 初始化全局配置
+- 注册可用 mint
+- 建立每个 mint 对应的 vault
+- 用户发起 `request_on_ramp` / `request_off_ramp`
+- 管理员审批 / 拒绝
+- 管理员直接 `instant_on_ramp`
+
+业务 ID 生成方式：
+
+- `stablecoin-ramp` 内部会 CPI 调 `business-id-factory.reserve_business_id`
+- 然后读取固定 `BusinessIdRecord.ref_id`
+- 再把该值写入每条 `RampRequest.business_id`
 
 这意味着：
 
-- `GLUSD`、`GLSGD` 等通过当前脚本创建的 mint 可以共用一个白名单
-- 白名单检查针对的是 `source_token` 和 `destination_token` 两个 ATA
-- 白名单的增删改不再需要修改 `transfer-hook` 程序本身
-
-## 合约指令
-
-### `transfer-hook`
-
-1. `initialize_extra_account_meta_list`
-   为指定 mint 初始化 `ExtraAccountMetaList`，并把外部 `white_list` 账户登记为额外账户。
-2. `transfer_hook`
-   在 Token-2022 转账过程中被调用，检查发送方和接收方 ATA 是否都在白名单中。
-
-### `whitelist-manager`
-
-1. `initialize_whitelist`
-   初始化某个 authority 对应的共享白名单 PDA。
-2. `add_to_whitelist`
-   添加一个 token account 到共享白名单。
-3. `remove_from_whitelist`
-   从共享白名单移除一个 token account。
+- 客户端不需要单独先调用 `business-id-factory`
+- 客户端也不需要创建随机的 `business_id_record` 账户
+- 但链上历史仍然以 `RampRequest` 为准，不是 `BusinessIdRecord`
 
 ## 项目结构
 
@@ -71,13 +95,14 @@ projectc-token-2022/
 ├── migrations/
 │   └── deploy.ts
 ├── programs/
+│   ├── business-id-factory/
+│   ├── stablecoin-ramp/
 │   ├── transfer-hook/
-│   │   └── src/lib.rs
 │   └── whitelist-manager/
-│       └── src/lib.rs
 ├── deployments/
 │   └── *.json
 └── tests/
+    ├── stablecoin-ramp.ts
     └── transfer-hook.ts
 ```
 
@@ -95,168 +120,165 @@ projectc-token-2022/
 pnpm install
 ```
 
-如果你使用 npm，也可以：
-
-```bash
-npm install
-```
-
 ## 构建
 
 ```bash
 anchor build
 ```
 
-## 部署与迁移
+## 部署流程
 
-当前推荐把“程序部署”和“mint 初始化”分开执行。
-
-### 1. 部署程序
+### 1. 部署四个 program
 
 ```bash
 anchor build
 anchor deploy --program-name whitelist_manager
+anchor deploy --program-name business_id_factory
+anchor deploy --program-name stablecoin_ramp
 anchor deploy --program-name transfer_hook
 ```
 
-作用：
-
-- 部署 `whitelist-manager`
-- 部署 `transfer-hook`
-- 不会自动创建新的 token mint
-- 不会自动初始化白名单成员
-
-### 2. 创建带扩展的 token mint，并绑定共享白名单
+### 2. 运行 migration
 
 ```bash
-anchor run deploy
+anchor migrate
 ```
 
-作用：
+当前 [migrations/deploy.ts](/usr/src/rust/projectc-token-2022/migrations/deploy.ts) 会执行这些动作：
 
-- 运行 `migrations/deploy.ts`
-- 调用 `whitelist_manager.initialize_whitelist`
-- 创建新的 `GLUSD` / `GLSGD`
-- 为 mint 初始化：
+- 初始化共享白名单
+- 把部署者 wallet 加入 wallet 白名单
+- 把 `WHITELIST_OWNERS` 中的钱包加入 wallet 白名单
+- 初始化 `business-id-factory`
+- 初始化 `stablecoin-ramp` config
+- 创建 `GLUSD` / `GLSGD` 两个 Token-2022 mint
+- 为每个 mint 初始化：
   - `TransferHook`
   - `PausableConfig`
   - `PermanentDelegate`
-- 创建 treasury ATA
-- 初始化 `ExtraAccountMetaList`
-- 把同一个共享 `whiteList` 账户绑定给多个 mint
-- 将部署者 treasury ATA 加入共享白名单
-- 生成 `deployments/*.json` manifest
+- 为每个 mint 初始化 `ExtraAccountMetaList`
+- 为每个 mint 在 `stablecoin-ramp` 注册 `TokenConfig` 和 `vault`
+- 为白名单钱包自动创建对应 ATA，并把这些 ATA 加入 transfer-hook 白名单
+- 输出 `deployments/*.json` manifest
 
-如果要在部署时额外加入白名单钱包：
+如果你想在迁移时附带额外白名单钱包：
 
 ```bash
-WHITELIST_OWNERS=addr1,addr2,addr3 anchor run deploy
+WHITELIST_OWNERS=addr1,addr2,addr3 anchor migrate
 ```
 
-这里传入的是 wallet 地址，脚本会自动为每个 mint 创建对应 ATA，并把这些 ATA 加入共享白名单。
+这里传的是 wallet 地址，不是 ATA。脚本会自动：
 
-## 迁移脚本产物
+- 把 wallet 地址加入 ramp 白名单
+- 为这些 wallet 创建对应 ATA
+- 把 ATA 加入 transfer-hook 白名单
 
-每次执行 `anchor run deploy` 后，会在 `deployments/` 下写入一个新的 manifest，包含：
+## Migration 输出
 
-- `programId`
-- `mint`
-- `pauseAuthority`
-- `permanentDelegate`
-- `treasuryTokenAccount`
-- `extraAccountMetaList`
-- `whiteList`
+每次执行 `anchor migrate` 后，`deployments/*.json` 会记录：
+
+- 四个 program 地址
+- 共享 `whiteList`
+- `factoryState`
+- 固定 `businessIdRecord`
+- `rampConfig`
+- `vaultAuthority`
+- 每个 mint 的：
+  - mint 地址
+  - treasury ATA
+  - extra account meta list
+  - ramp token config
+  - ramp vault
 
 ## 测试
 
-当前主测试文件是：
+当前有两个集成测试文件：
 
 - `tests/transfer-hook.ts`
+- `tests/stablecoin-ramp.ts`
 
-覆盖内容：
+### `tests/transfer-hook.ts`
 
-- 创建带三种 extension 的 mint
-- 初始化共享白名单
-- 初始化两个 mint 的 token account 和 mint supply
-- 初始化 transfer hook 元数据，并让多个 mint 复用同一个白名单
-- 通过 `whitelist-manager` 添加/移除白名单
-- 双边白名单转账成功/失败
+覆盖：
+
+- 共享白名单初始化
+- 多 mint 复用同一白名单
+- transfer hook 白名单校验
 - pause / resume
-- permanent delegate 直接转账
-- permanent delegate 直接 burn
+- permanent delegate transfer / burn
+
+### `tests/stablecoin-ramp.ts`
+
+覆盖：
+
+- 初始化 whitelist / business-id-factory / stablecoin-ramp config
+- 注册 mint 并为 ramp vault 注入流动性
+- `request_on_ramp` 内部 CPI 调业务 ID 工厂
+- `approve_on_ramp` 放币到用户 ATA
+- `request_off_ramp` 内部再次生成业务 ID
+- 固定 `BusinessIdRecord` 被覆盖
+- 旧 `RampRequest.business_id` 仍然保留历史业务号
+- `approve_off_ramp` 对自发行币执行 burn
 
 ### 运行全部测试
-
-```bash
-anchor test --skip-local-validator --skip-build --skip-deploy --run tests/transfer-hook.ts
-```
-
-注意：
-
-- `Anchor.toml` 中定义了自定义 `test` script
-- 执行 `anchor test` 时，Anchor 会运行该脚本
-- 当前脚本会跑 `tests/**/*.ts`
-
-### 只运行单个测试文件
-
-如果你只想跑 `tests/transfer-hook.ts`，建议直接用 `ts-mocha`：
-
-```bash
-ANCHOR_PROVIDER_URL="https://devnet.helius-rpc.com/?api-key=YOUR_API_KEY" \
-ANCHOR_WALLET="$HOME/.config/solana/id.json" \
-pnpm ts-mocha -p ./tsconfig.json -t 1000000 tests/transfer-hook.ts
-```
-
-如果你要复用已部署的 devnet 程序，也可以：
 
 ```bash
 anchor test --skip-local-validator --skip-build --skip-deploy
 ```
 
-## 典型使用流程
+### 只运行 ramp 测试
 
-1. `anchor build`
-2. `anchor deploy --program-name whitelist_manager`
-3. `anchor deploy --program-name transfer_hook`
-4. `anchor run deploy`
-5. 读取最新 `deployments/*.json` 获取新 mint 地址和共享 `whiteList`
-6. 后续通过 `whitelist-manager` 调用 `add_to_whitelist`
-7. 对白名单中的 ATA 执行转账
-8. 如有需要，调用 Token-2022 的 pause / resume
+```bash
+anchor test --skip-local-validator --skip-build --skip-deploy --run tests/stablecoin-ramp.ts
+```
 
-## 监听建议
+### 只运行 transfer-hook 测试
 
-如果你要开发链上监听服务，建议同时监听：
+```bash
+anchor test --skip-local-validator --skip-build --skip-deploy --run tests/transfer-hook.ts
+```
 
-- `transfer_hook` 的 `logsSubscribe`
-- `whitelist_manager` 的 `logsSubscribe`
-- 目标 mint 地址的 `logsSubscribe`
-- 再通过 `getTransaction(signature)` 做完整交易解析
+## Stablecoin Ramp 使用流程
 
-建议落地的事件类型：
+### On-ramp
 
-- `Mint`
-- `WhitelistAdded`
-- `WhitelistRemoved`
-- `TransferSucceeded`
-- `TransferRejected`
-- `Paused`
-- `Resumed`
-- `BurnedByPermanentDelegate`
+1. 客户端准备一个新的 `request` 账户
+2. 调用 `stablecoin-ramp.request_on_ramp(amount)`
+3. 程序内部 CPI 调 `business-id-factory.reserve_business_id`
+4. 固定 `BusinessIdRecord` 被更新为最新 `ref_id`
+5. `RampRequest.business_id` 保存这次请求对应的业务号
+6. 管理员调用 `approve_on_ramp` 或 `reject_on_ramp`
+
+### Instant on-ramp
+
+1. 管理员调用 `instant_on_ramp(amount)`
+2. 程序内部生成业务号
+3. 直接从 vault 放币到用户 ATA
+4. `RampRequest` 直接记为 `RequestApproved`
+
+### Off-ramp
+
+1. 用户调用 `request_off_ramp(amount)`
+2. 程序内部生成新的业务号
+3. 用户 token 先转入 vault
+4. 管理员调用 `approve_off_ramp` 或 `reject_off_ramp`
+5. 若 `is_self_issued = true`，审批时对 vault 中对应数量执行 burn
 
 ## 生产注意事项
 
-当前版本不建议直接按正式生产资产方案上线，主要原因：
+当前版本更偏向业务流程原型，不建议直接按正式生产资产上线，主要原因：
 
-- 白名单按 authority 共享，而不是按 mint 隔离
-- 白名单存储为单个 `Vec<Pubkey>`
-- `mint authority`、`pause authority`、`permanent delegate` 都默认绑在 deployer 钱包
+- `BusinessIdRecord` 是固定 PDA，只保存最近一次业务号
+- `FactoryState` 使用单账户 `Vec` 维护计数器，长期增长需要扩容策略
+- `whitelist-manager` 仍是单账户 `Vec<Pubkey>` 结构
+- `mint authority`、`pause authority`、`permanent delegate`、`ramp authority` 默认都是 deployer
 
-如果需要走生产化路线，建议下一步至少做：
+如果要生产化，建议至少补这几项：
 
-- 支持按 mint 隔离白名单，或增加 mint -> policy 配置层
-- 将关键权限迁到多签
-- 重构白名单存储，避免单账户无限增长
+- 多签管理关键 authority
+- 为业务 ID 工厂做计数器分片或 `realloc` 方案
+- 给 ramp 请求和业务号建立更完整的审计索引
+- 明确区分 wallet 白名单和 token account 白名单的治理流程
 
 ## License
 
