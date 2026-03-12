@@ -4,6 +4,8 @@ import { expect } from "chai";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
+  ExtensionType,
+  burnChecked,
   createAssociatedTokenAccountInstruction,
   createInitializeMintInstruction,
   createInitializePausableConfigInstruction,
@@ -11,8 +13,6 @@ import {
   createInitializeTransferHookInstruction,
   createMintToInstruction,
   createTransferCheckedWithTransferHookInstruction,
-  ExtensionType,
-  burnChecked,
   getAssociatedTokenAddressSync,
   getMint,
   getMintLen,
@@ -36,10 +36,12 @@ describe("transfer-hook extensions", () => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.TransferHook as Program<TransferHook>;
+  const whitelistProgram = anchor.workspace.WhitelistManager as Program<any>;
   const wallet = provider.wallet as anchor.Wallet;
   const connection = provider.connection;
 
   const mint = Keypair.generate();
+  const secondMint = Keypair.generate();
   const sourceOwner = Keypair.generate();
   const recipient = Keypair.generate();
   const outsider = Keypair.generate();
@@ -49,6 +51,12 @@ describe("transfer-hook extensions", () => {
   const ownerTransferAmount = 1_000n * 10n ** BigInt(decimals);
   const delegateTransferAmount = 2_000n * 10n ** BigInt(decimals);
   const burnAmount = 500n * 10n ** BigInt(decimals);
+
+  const mintExtensions = [
+    ExtensionType.TransferHook,
+    ExtensionType.PausableConfig,
+    ExtensionType.PermanentDelegate,
+  ];
 
   const sourceTokenAccount = getAssociatedTokenAddressSync(
     mint.publicKey,
@@ -71,13 +79,123 @@ describe("transfer-hook extensions", () => {
     TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID
   );
-
-  const [whiteListPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("white_list")],
-    program.programId
+  const secondSourceTokenAccount = getAssociatedTokenAddressSync(
+    secondMint.publicKey,
+    sourceOwner.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const secondDestinationTokenAccount = getAssociatedTokenAddressSync(
+    secondMint.publicKey,
+    recipient.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
   );
 
+  const [whiteListPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("white_list"), wallet.publicKey.toBuffer()],
+    whitelistProgram.programId
+  );
+
+  async function createMintWithExtensions(mintKeypair: Keypair) {
+    const mintLen = getMintLen(mintExtensions);
+    const lamports = await connection.getMinimumBalanceForRentExemption(
+      mintLen
+    );
+
+    await sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: mintKeypair.publicKey,
+          space: mintLen,
+          lamports,
+          programId: TOKEN_2022_PROGRAM_ID,
+        }),
+        createInitializeTransferHookInstruction(
+          mintKeypair.publicKey,
+          wallet.publicKey,
+          program.programId,
+          TOKEN_2022_PROGRAM_ID
+        ),
+        createInitializePausableConfigInstruction(
+          mintKeypair.publicKey,
+          wallet.publicKey,
+          TOKEN_2022_PROGRAM_ID
+        ),
+        createInitializePermanentDelegateInstruction(
+          mintKeypair.publicKey,
+          wallet.publicKey,
+          TOKEN_2022_PROGRAM_ID
+        ),
+        createInitializeMintInstruction(
+          mintKeypair.publicKey,
+          decimals,
+          wallet.publicKey,
+          null,
+          TOKEN_2022_PROGRAM_ID
+        )
+      ),
+      [wallet.payer, mintKeypair],
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
+    );
+  }
+
+  async function initializeWhitelist() {
+    const existing = await connection.getAccountInfo(whiteListPda, "confirmed");
+    if (existing) {
+      return;
+    }
+
+    await sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(
+        await whitelistProgram.methods
+          .initializeWhitelist()
+          .accounts({
+            authority: wallet.publicKey,
+            whiteList: whiteListPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction()
+      ),
+      [wallet.payer],
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
+    );
+  }
+
+  async function initializeHookMeta(mintAddress: PublicKey) {
+    await sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(
+        await program.methods
+          .initializeExtraAccountMetaList()
+          .accounts({
+            mint: mintAddress,
+            whiteList: whiteListPda,
+          })
+          .instruction()
+      ),
+      [wallet.payer],
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
+    );
+  }
+
   async function sendTransfer(
+    mintAddress: PublicKey,
+    source: PublicKey,
     authority: PublicKey,
     signers: Keypair[],
     destination: PublicKey,
@@ -85,8 +203,8 @@ describe("transfer-hook extensions", () => {
   ) {
     const instruction = await createTransferCheckedWithTransferHookInstruction(
       connection,
-      sourceTokenAccount,
-      mint.publicKey,
+      source,
+      mintAddress,
       destination,
       authority,
       amount,
@@ -96,47 +214,59 @@ describe("transfer-hook extensions", () => {
       TOKEN_2022_PROGRAM_ID
     );
 
-    const transaction = new Transaction().add(instruction);
-    return sendAndConfirmTransaction(connection, transaction, signers, {
-      skipPreflight: true,
-      commitment: "confirmed",
-    });
+    return sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(instruction),
+      signers,
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
+    );
   }
 
   async function addToWhitelist(tokenAccount: PublicKey) {
-    const transaction = new Transaction().add(
-      await program.methods
-        .addToWhitelist()
-        .accounts({
-          newAccount: tokenAccount,
-          signer: wallet.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction()
+    return sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(
+        await whitelistProgram.methods
+          .addToWhitelist()
+          .accounts({
+            newAccount: tokenAccount,
+            authority: wallet.publicKey,
+            whiteList: whiteListPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction()
+      ),
+      [wallet.payer],
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
     );
-
-    return sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
-      skipPreflight: true,
-      commitment: "confirmed",
-    });
   }
 
   async function removeFromWhitelist(tokenAccount: PublicKey) {
-    const transaction = new Transaction().add(
-      await (program.methods as any)
-        .removeFromWhitelist()
-        .accounts({
-          accountToRemove: tokenAccount,
-          signer: wallet.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction()
+    return sendAndConfirmTransaction(
+      connection,
+      new Transaction().add(
+        await whitelistProgram.methods
+          .removeFromWhitelist()
+          .accounts({
+            accountToRemove: tokenAccount,
+            authority: wallet.publicKey,
+            whiteList: whiteListPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction()
+      ),
+      [wallet.payer],
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
     );
-
-    return sendAndConfirmTransaction(connection, transaction, [wallet.payer], {
-      skipPreflight: true,
-      commitment: "confirmed",
-    });
   }
 
   async function getAmount(tokenAccount: PublicKey): Promise<bigint> {
@@ -148,58 +278,7 @@ describe("transfer-hook extensions", () => {
   }
 
   it("creates a mint with TransferHook, Pausable, and PermanentDelegate extensions", async () => {
-    const extensions = [
-      ExtensionType.TransferHook,
-      ExtensionType.PausableConfig,
-      ExtensionType.PermanentDelegate,
-    ];
-    const mintLen = getMintLen(extensions);
-    const lamports = await connection.getMinimumBalanceForRentExemption(
-      mintLen
-    );
-
-    const transaction = new Transaction().add(
-      SystemProgram.createAccount({
-        fromPubkey: wallet.publicKey,
-        newAccountPubkey: mint.publicKey,
-        space: mintLen,
-        lamports,
-        programId: TOKEN_2022_PROGRAM_ID,
-      }),
-      createInitializeTransferHookInstruction(
-        mint.publicKey,
-        wallet.publicKey,
-        program.programId,
-        TOKEN_2022_PROGRAM_ID
-      ),
-      createInitializePausableConfigInstruction(
-        mint.publicKey,
-        wallet.publicKey,
-        TOKEN_2022_PROGRAM_ID
-      ),
-      createInitializePermanentDelegateInstruction(
-        mint.publicKey,
-        wallet.publicKey,
-        TOKEN_2022_PROGRAM_ID
-      ),
-      createInitializeMintInstruction(
-        mint.publicKey,
-        decimals,
-        wallet.publicKey,
-        null,
-        TOKEN_2022_PROGRAM_ID
-      )
-    );
-
-    await sendAndConfirmTransaction(
-      connection,
-      transaction,
-      [wallet.payer, mint],
-      {
-        skipPreflight: true,
-        commitment: "confirmed",
-      }
-    );
+    await createMintWithExtensions(mint);
 
     const mintInfo = await getMint(
       connection,
@@ -226,75 +305,121 @@ describe("transfer-hook extensions", () => {
     );
   });
 
-  it("creates token accounts, mints supply, and initializes transfer-hook metadata", async () => {
-    const tokenSetupTx = new Transaction().add(
-      createAssociatedTokenAccountInstruction(
-        wallet.publicKey,
-        sourceTokenAccount,
-        sourceOwner.publicKey,
-        mint.publicKey,
-        TOKEN_2022_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      ),
-      createAssociatedTokenAccountInstruction(
-        wallet.publicKey,
-        destinationTokenAccount,
-        recipient.publicKey,
-        mint.publicKey,
-        TOKEN_2022_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      ),
-      createAssociatedTokenAccountInstruction(
-        wallet.publicKey,
-        outsiderTokenAccount,
-        outsider.publicKey,
-        mint.publicKey,
-        TOKEN_2022_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      ),
-      createMintToInstruction(
-        mint.publicKey,
-        sourceTokenAccount,
-        wallet.publicKey,
-        mintedAmount,
-        [],
-        TOKEN_2022_PROGRAM_ID
-      )
-    );
-
-    await sendAndConfirmTransaction(connection, tokenSetupTx, [wallet.payer], {
-      skipPreflight: true,
-      commitment: "confirmed",
-    });
-
-    const initializeExtraAccountMetaListInstruction = await program.methods
-      .initializeExtraAccountMetaList()
-      .accounts({
-        mint: mint.publicKey,
-      })
-      .instruction();
+  it("creates token accounts, mints supply, and initializes shared whitelist metadata", async () => {
+    await initializeWhitelist();
+    await createMintWithExtensions(secondMint);
 
     await sendAndConfirmTransaction(
       connection,
-      new Transaction().add(initializeExtraAccountMetaListInstruction),
+      new Transaction().add(
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          sourceTokenAccount,
+          sourceOwner.publicKey,
+          mint.publicKey,
+          TOKEN_2022_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        ),
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          destinationTokenAccount,
+          recipient.publicKey,
+          mint.publicKey,
+          TOKEN_2022_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        ),
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          outsiderTokenAccount,
+          outsider.publicKey,
+          mint.publicKey,
+          TOKEN_2022_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        ),
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          secondSourceTokenAccount,
+          sourceOwner.publicKey,
+          secondMint.publicKey,
+          TOKEN_2022_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        ),
+        createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          secondDestinationTokenAccount,
+          recipient.publicKey,
+          secondMint.publicKey,
+          TOKEN_2022_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        ),
+        createMintToInstruction(
+          mint.publicKey,
+          sourceTokenAccount,
+          wallet.publicKey,
+          mintedAmount,
+          [],
+          TOKEN_2022_PROGRAM_ID
+        ),
+        createMintToInstruction(
+          secondMint.publicKey,
+          secondSourceTokenAccount,
+          wallet.publicKey,
+          mintedAmount,
+          [],
+          TOKEN_2022_PROGRAM_ID
+        )
+      ),
       [wallet.payer],
-      { skipPreflight: true, commitment: "confirmed" }
+      {
+        skipPreflight: true,
+        commitment: "confirmed",
+      }
     );
 
+    await initializeHookMeta(mint.publicKey);
+    await initializeHookMeta(secondMint.publicKey);
+
     expect(await getAmount(sourceTokenAccount)).to.equal(mintedAmount);
+    expect(await getAmount(secondSourceTokenAccount)).to.equal(mintedAmount);
     expect(
       await connection.getAccountInfo(whiteListPda, "confirmed")
     ).to.not.equal(null);
   });
 
-  it("enforces TransferHook with whitelist checks on both source and destination", async () => {
+  it("lets multiple mints share the same whitelist program state", async () => {
     await addToWhitelist(sourceTokenAccount);
     await addToWhitelist(destinationTokenAccount);
+    await addToWhitelist(secondSourceTokenAccount);
+    await addToWhitelist(secondDestinationTokenAccount);
 
+    const secondSourceBefore = await getAmount(secondSourceTokenAccount);
+    const secondDestinationBefore = await getAmount(secondDestinationTokenAccount);
+
+    await sendTransfer(
+      secondMint.publicKey,
+      secondSourceTokenAccount,
+      sourceOwner.publicKey,
+      [wallet.payer, sourceOwner],
+      secondDestinationTokenAccount,
+      ownerTransferAmount
+    );
+
+    const secondSourceAfter = await getAmount(secondSourceTokenAccount);
+    const secondDestinationAfter = await getAmount(secondDestinationTokenAccount);
+
+    expect(secondSourceBefore - secondSourceAfter).to.equal(ownerTransferAmount);
+    expect(secondDestinationAfter - secondDestinationBefore).to.equal(
+      ownerTransferAmount
+    );
+  });
+
+  it("enforces TransferHook with whitelist checks on both source and destination", async () => {
     const sourceBefore = await getAmount(sourceTokenAccount);
     const destinationBefore = await getAmount(destinationTokenAccount);
 
     await sendTransfer(
+      mint.publicKey,
+      sourceTokenAccount,
       sourceOwner.publicKey,
       [wallet.payer, sourceOwner],
       destinationTokenAccount,
@@ -310,6 +435,8 @@ describe("transfer-hook extensions", () => {
     let threw = false;
     try {
       await sendTransfer(
+        mint.publicKey,
+        sourceTokenAccount,
         sourceOwner.publicKey,
         [wallet.payer, sourceOwner],
         outsiderTokenAccount,
@@ -336,6 +463,8 @@ describe("transfer-hook extensions", () => {
     let pausedTransferFailed = false;
     try {
       await sendTransfer(
+        mint.publicKey,
+        sourceTokenAccount,
         sourceOwner.publicKey,
         [wallet.payer, sourceOwner],
         destinationTokenAccount,
@@ -361,6 +490,8 @@ describe("transfer-hook extensions", () => {
     const destinationBefore = await getAmount(destinationTokenAccount);
 
     await sendTransfer(
+      mint.publicKey,
+      sourceTokenAccount,
       sourceOwner.publicKey,
       [wallet.payer, sourceOwner],
       destinationTokenAccount,
@@ -379,6 +510,8 @@ describe("transfer-hook extensions", () => {
     const destinationBeforeTransfer = await getAmount(destinationTokenAccount);
 
     await sendTransfer(
+      mint.publicKey,
+      sourceTokenAccount,
       wallet.publicKey,
       [wallet.payer],
       destinationTokenAccount,
@@ -434,6 +567,8 @@ describe("transfer-hook extensions", () => {
     let threw = false;
     try {
       await sendTransfer(
+        mint.publicKey,
+        sourceTokenAccount,
         sourceOwner.publicKey,
         [wallet.payer, sourceOwner],
         destinationTokenAccount,

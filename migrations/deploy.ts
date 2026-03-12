@@ -77,8 +77,10 @@ async function ensureAssociatedTokenAccount(
 async function createTransferHookMint(
   provider: any,
   program: any,
+  whitelistProgram: any,
   tokenConfig: any,
-  whitelistOwners: PublicKey[]
+  whitelistOwners: PublicKey[],
+  whiteList: PublicKey
 ) {
   const connection = provider.connection;
   const payer = provider.wallet.payer;
@@ -171,6 +173,7 @@ async function createTransferHookMint(
     .initializeExtraAccountMetaList()
     .accounts({
       mint: mint.publicKey,
+      whiteList,
     })
     .rpc();
 
@@ -194,11 +197,12 @@ async function createTransferHookMint(
       await provider.sendAndConfirm(new Transaction().add(...instructions));
     }
 
-    await program.methods
+    await whitelistProgram.methods
       .addToWhitelist()
       .accounts({
         newAccount: tokenAccount,
-        signer: payer.publicKey,
+        authority: payer.publicKey,
+        whiteList,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -212,12 +216,6 @@ async function createTransferHookMint(
   // 存储额外账户元数据的 PDA
   const [extraAccountMetaList] = PublicKey.findProgramAddressSync(
     [Buffer.from("extra-account-metas"), mint.publicKey.toBuffer()],
-    program.programId
-  );
-
-  // 白名单 PDA (所有 mint 共享)
-  const [whiteList] = PublicKey.findProgramAddressSync(
-    [Buffer.from("white_list")],
     program.programId
   );
 
@@ -269,10 +267,16 @@ module.exports = async (provider: any) => {
   anchor.setProvider(provider);
 
   const program = anchor.workspace.TransferHook;
+  const whitelistProgram = anchor.workspace.WhitelistManager;
   const clusterName = provider.connection.rpcEndpoint;
   const whitelistOwners = parseWhitelistOwners();
+  const [whiteList] = PublicKey.findProgramAddressSync(
+    [Buffer.from("white_list"), provider.wallet.publicKey.toBuffer()],
+    whitelistProgram.programId
+  );
 
   console.log("Transfer hook program:", program.programId.toBase58());
+  console.log("Whitelist manager program:", whitelistProgram.programId.toBase58());
   console.log("Deployer:", provider.wallet.publicKey.toBase58());
   console.log(
     "Whitelist owners:",
@@ -281,13 +285,26 @@ module.exports = async (provider: any) => {
       : "(deployer treasury ATA only)"
   );
 
+  if (!(await accountExists(provider.connection, whiteList))) {
+    await whitelistProgram.methods
+      .initializeWhitelist()
+      .accounts({
+        authority: provider.wallet.publicKey,
+        whiteList,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+  }
+
   const deployedTokens = [];
   for (const tokenConfig of TOKEN_CONFIGS) {
     const token = await createTransferHookMint(
       provider,
       program,
+      whitelistProgram,
       tokenConfig,
-      whitelistOwners
+      whitelistOwners,
+      whiteList
     );
     deployedTokens.push(token);
 
@@ -308,6 +325,6 @@ module.exports = async (provider: any) => {
 
   console.log("Deployment manifest written to:", manifestPath);
   console.log(
-    "Note: this program uses a single shared white_list PDA for every mint in this deployment."
+    "Note: all mints in this deployment share the same whitelist-manager PDA."
   );
 };

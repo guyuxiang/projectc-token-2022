@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
-use crate::{constants::EVENT_WHITELIST_REMOVED, error::TransferError, RemoveFromWhiteList};
+use crate::{constants::EVENT_WHITELIST_REMOVED, error::WhiteListError, RemoveFromWhiteList};
 
 pub fn handler(ctx: Context<RemoveFromWhiteList>) -> Result<()> {
-    if ctx.accounts.white_list.authority != ctx.accounts.signer.key() {
-        return err!(TransferError::Unauthorized);
+    if ctx.accounts.white_list.authority != ctx.accounts.authority.key() {
+        return err!(WhiteListError::Unauthorized);
     }
 
     let removed = ctx
@@ -13,14 +13,14 @@ pub fn handler(ctx: Context<RemoveFromWhiteList>) -> Result<()> {
         .remove(&ctx.accounts.account_to_remove.key());
 
     if !removed {
-        return err!(TransferError::AccountNotInWhiteList);
+        return err!(WhiteListError::AccountNotInWhiteList);
     }
 
     msg!(
         "{} account={} authority={}",
         EVENT_WHITELIST_REMOVED,
         ctx.accounts.account_to_remove.key(),
-        ctx.accounts.signer.key()
+        ctx.accounts.authority.key()
     );
 
     Ok(())

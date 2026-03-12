@@ -24,6 +24,7 @@ anchor-lang = {version = "0.32.1", features = ["interface-instructions", "init-i
 anchor-spl = "0.32.1"
 spl-tlv-account-resolution = "0.9.0"
 spl-transfer-hook-interface = "0.9.0"
+whitelist-manager = { path = "../whitelist-manager", features = ["cpi"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

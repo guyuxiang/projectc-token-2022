@@ -1,23 +1,23 @@
 {
   "cluster": "https___devnet_helius-rpc_com__api-key_7c8a6828-2b0b-456b-a1fc-f08073e8304a",
-  "programId": "5LMLujHtNx4VARPXPAUveyRVoMbhmQyM36sasbieoJLw",
-  "deployedAt": "2026-03-10T12:11:45.772Z",
+  "programId": "BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3",
+  "deployedAt": "2026-03-12T03:23:26.813Z",
   "tokens": [
     {
       "name": "Global USD",
       "symbol": "GLUSD",
       "decimals": 6,
       "initialSupplyUi": 0,
-      "mint": "FTTbDaMwK5R7aVpzrZc7FgeBHYic4V2Fj6Qd6xQuU2SC",
+      "mint": "Cru8NpDGTpQufPs3CsxBSMb2Uh6w9AUnAs991MiX5XAL",
       "pauseAuthority": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
       "permanentDelegate": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
-      "treasuryTokenAccount": "8jSKieVz2qZktvUk9nyjcDVesvb7b4YvYqys3RFeaGgV",
-      "extraAccountMetaList": "Fe7x8G5Vsmjepcdyx7FBPE9X7zJqWsuzimsfouqijSCg",
-      "whiteList": "76uDGM4oH7zbvzhFK8svREPRibVshTw5xPQKPg8UhsL5",
+      "treasuryTokenAccount": "DkiAe6cXEccEJsrQFGdSvDKFFMdot1MwQzpc6uPXR9XM",
+      "extraAccountMetaList": "DGQTDZRHb9ALf1jGEgcak9EA1NGn2S3bfAnocGMGdRLw",
+      "whiteList": "CSC2y22oP9SDGJTvtXBLWxkZXkbQY1mJYfsMBAtgZV6z",
       "whitelistTokenAccounts": [
         {
           "owner": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
-          "tokenAccount": "8jSKieVz2qZktvUk9nyjcDVesvb7b4YvYqys3RFeaGgV"
+          "tokenAccount": "DkiAe6cXEccEJsrQFGdSvDKFFMdot1MwQzpc6uPXR9XM"
         }
       ]
     },
@@ -26,16 +26,16 @@
       "symbol": "GLSGD",
       "decimals": 6,
       "initialSupplyUi": 0,
-      "mint": "7pq1WPNSpVZfNv25bY5fF1WoUnm4HoJP7aohKzE5feh7",
+      "mint": "3HNWVVfxWYmjrh7y5jDZJaCRybGhtmddpK2TSLpc6vWJ",
       "pauseAuthority": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
       "permanentDelegate": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
-      "treasuryTokenAccount": "GrSzwGEdU6ySKJKRNWSxJ57bx1vzsVYAJVkk1RjTW5N9",
-      "extraAccountMetaList": "CPRFEViAXRDRiuwsh3PCneiZDis3BWgRASogz5n6h476",
-      "whiteList": "76uDGM4oH7zbvzhFK8svREPRibVshTw5xPQKPg8UhsL5",
+      "treasuryTokenAccount": "5povcn5LgxVaPVSJkcuNTXaga674krNVR1FF2B8919rW",
+      "extraAccountMetaList": "BVdCCnN5KpLrGeePFHwsuYaqybUgLYdPMxyY9uDC4PLQ",
+      "whiteList": "CSC2y22oP9SDGJTvtXBLWxkZXkbQY1mJYfsMBAtgZV6z",
       "whitelistTokenAccounts": [
         {
           "owner": "HezSa158cnJFpCJZwGQ5BE6DoZVdKNtrk31MjB1VdYmM",
-          "tokenAccount": "GrSzwGEdU6ySKJKRNWSxJ57bx1vzsVYAJVkk1RjTW5N9"
+          "tokenAccount": "5povcn5LgxVaPVSJkcuNTXaga674krNVR1FF2B8919rW"
         }
       ]
     }
