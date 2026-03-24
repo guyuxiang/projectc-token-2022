@@ -1,4 +1,5 @@
 [toolchain]
+anchor_version = "0.31.1"
 
 [features]
 seeds = false
@@ -9,6 +10,7 @@ transfer_hook = "BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3"
 whitelist_manager = "63YybmV5S1uZdPoXRCUHP5LR34maufSGW4bNaT2GmLMj"
 business_id_factory = "35y1BTgc6QzvGYL6raYNJJf6j136ZfQcssWHKKr8rCRf"
 stablecoin_ramp = "7Yh27as26FVuh5Hqeq9EpwyKUukiu5RKcgtPsqXrEVeg"
+oft = "9UovNrJD8pQyBLheeHNayuG1wJSEAoxkmM14vw5gcsTT"
 
 [registry]
 url = "https://api.apr.dev"

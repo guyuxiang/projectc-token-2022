@@ -8,7 +8,7 @@ use business_id_factory::{
 };
 use whitelist_manager::state::WhiteList;
 
-declare_id!("7Yh27as26FVuh5Hqeq9EpwyKUukiu5RKcgtPsqXrEVeg");
+declare_id!("Gov4oxrHdeDw7XihXKYRzq67aoJCrfhzumybUfDqHGmF");
 
 const CONFIG_SEED: &[u8] = b"stablecoin-ramp-config";
 const VAULT_AUTHORITY_SEED: &[u8] = b"stablecoin-ramp-vault-authority";

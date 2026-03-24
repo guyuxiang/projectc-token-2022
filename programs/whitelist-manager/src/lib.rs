@@ -8,7 +8,7 @@ pub mod state;
 use constants::WHITE_LIST_SEED;
 use state::WhiteList;
 
-declare_id!("63YybmV5S1uZdPoXRCUHP5LR34maufSGW4bNaT2GmLMj");
+declare_id!("DtYLNr7A4wYkjDJqMo4Vq29v8pC8gtsspoyBdZFkUqyT");
 
 #[derive(Accounts)]
 pub struct InitializeWhiteList<'info> {

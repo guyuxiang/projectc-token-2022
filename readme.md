@@ -1,285 +1,458 @@
-# Token-2022 Transfer Hook + Stablecoin Ramp
+# projectc-oft-solana
 
-基于 Solana Anchor 的 Token-2022 业务示例，当前包含四个独立 program：
+这个仓库是 Solana 侧稳定币 OFT 实现。它的目标不是替代你原有的 Token-2022 业务，而是在保留原稳定币 mint 扩展能力的前提下，为它增加一条 `Solana Devnet <-> Sepolia` 的双向跨链通道。
+
+当前实现基于：
+
+- Anchor program `programs/oft`
+- LayerZero Solana Endpoint V2
+- Native OFT
+- burn / mint
+- 无 `token_escrow`
+- `oft_fee = 0`
+
+这份 README 重点解释：
+
+- 这个仓库在整套跨链系统里负责什么
+- Solana 侧 OFT program 的核心账户和组件
+- 为什么这里可以兼容原来的扩展 mint
+- 一条跨链消息在 Solana 侧的完整执行路径
+- 当前工程入口和部署流程
+
+## 1. 项目定位
+
+这个仓库原本就有自己的业务 program：
 
 - `transfer-hook`
 - `whitelist-manager`
 - `business-id-factory`
 - `stablecoin-ramp`
 
-这套实现同时覆盖两类能力：
+现在又新增了一个专门的跨链 program：
 
-- Token-2022 转账白名单控制
-- 稳定币 on-ramp / off-ramp 业务流转与业务 ID 生成
+- `oft`
 
-## 当前 Program ID
+这意味着当前仓库同时承担两件事：
 
-- `transfer_hook`: `BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3`
-- `whitelist_manager`: `63YybmV5S1uZdPoXRCUHP5LR34maufSGW4bNaT2GmLMj`
-- `business_id_factory`: `35y1BTgc6QzvGYL6raYNJJf6j136ZfQcssWHKKr8rCRf`
-- `stablecoin_ramp`: `7Yh27as26FVuh5Hqeq9EpwyKUukiu5RKcgtPsqXrEVeg`
+- 保留本地 Token-2022 稳定币业务能力
+- 让这枚稳定币可以作为 LayerZero OFT 参与跨链
 
-## 架构说明
+Solana 侧负责：
 
-### 1. `whitelist-manager`
+- 使用现有 Token-2022 mint 作为跨链资产
+- 创建 `oft_store`
+- 在 `Solana -> Sepolia` 时 burn
+- 在 `Sepolia -> Solana` 时 mint
+- 把 mint authority 委托给包含 `oft_store` 的 `1-of-n` multisig
 
-负责维护共享白名单 PDA：
+## 2. 核心概念
 
-- seeds: `["white_list", authority]`
-- 可被多个 mint 复用
-- 当前白名单既存 wallet pubkey，也存 token account pubkey
+### 2.1 Native OFT
 
-用途分两类：
+这里采用的是 `Native OFT`，不是 OFT Adapter。
 
-- `stablecoin-ramp` 校验 wallet 是否允许发起 on/off ramp
-- `transfer-hook` 校验 source ATA / destination ATA 是否允许转账
+区别在于：
 
-### 2. `transfer-hook`
+- Native OFT
+  - 直接把本链原生 token 作为跨链资产
+  - 源链 burn，目标链 mint
+- Adapter
+  - 通过 lock / unlock 或 escrow 管理资产
+  - 更像“桥接包装层”
 
-用于 Token-2022 的转账回调校验：
+你这个项目是自发行稳定币，所以更适合 Native OFT。
 
-- 每个 mint 都会初始化 `ExtraAccountMetaList`
-- 额外依赖外部共享 `white_list` 账户
-- 转账时要求 source ATA 和 destination ATA 同时在白名单中
+### 2.2 `oft_store`
 
-### 3. `business-id-factory`
+`oft_store` 是 Solana 侧 OFT 的核心 PDA。它可以理解为：
 
-用于生成业务 ID。
+- 这个 OFT 在 Solana 上的“主状态账户”
+- 绑定某一枚 `token_mint`
+- 存放 admin、pause 状态、精度换算、endpoint program 等配置
 
-当前逻辑：
+在当前实现里：
 
-- 维护 `FactoryState`
-- 按 `日期 + token symbol + request type` 递增序列
-- 生成格式：`YYYYMMDDHHMMSS + SYMBOL + ONRAMP/OFFRAMP + sequence`
-- `BusinessIdRecord` 现在是固定 PDA：`["business-id-record"]`
-- 每次生成新业务号时，都会覆盖重写同一个 `BusinessIdRecord`
+- `oft_store` 的 seed 是 `["OFT", token_mint]`
+- 不再依赖 `token_escrow`
 
-注意：
+这点和官方默认示例不同，是这次项目定制化的重点。
 
-- `BusinessIdRecord` 只代表“最近一次生成的业务 ID”
-- 历史业务号不保存在这个账户中
-- 历史业务号要看 `stablecoin-ramp` 的 `RampRequest.business_id`
+### 2.3 Peer Config
 
-### 4. `stablecoin-ramp`
+每个远端链都有一份 peer 配置，里面主要包含：
 
-用于 on-ramp / off-ramp 请求流转。
+- 远端 EID
+- 远端 peer 地址
+- enforced options
+- inbound / outbound rate limiter
+- fee 配置
 
-主要能力：
+当前这套项目里：
 
-- 初始化全局配置
-- 注册可用 mint
-- 建立每个 mint 对应的 vault
-- 用户发起 `request_on_ramp` / `request_off_ramp`
-- 管理员审批 / 拒绝
-- 管理员直接 `instant_on_ramp`
+- 远端 peer 是 Sepolia 上的 OFT proxy
+- fee 固定为 `0`
+- 仍保留 peer config 结构，用来承载远端地址和执行参数
 
-业务 ID 生成方式：
+### 2.4 Nonce
 
-- `stablecoin-ramp` 内部会 CPI 调 `business-id-factory.reserve_business_id`
-- 然后读取固定 `BusinessIdRecord.ref_id`
-- 再把该值写入每条 `RampRequest.business_id`
+LayerZero 在接收消息时要维护 path 的 nonce 状态。Solana 侧如果没有初始化 nonce PDA：
 
-这意味着：
+- 目标 OApp 无法正确识别和推进 inbound 消息序列
+- 消息可能停在协议层
 
-- 客户端不需要单独先调用 `business-id-factory`
-- 客户端也不需要创建随机的 `business_id_record` 账户
-- 但链上历史仍然以 `RampRequest` 为准，不是 `BusinessIdRecord`
+所以 Solana 侧 wiring 不只配 peer，还要初始化 inbound nonce。
 
-## 项目结构
+### 2.5 Enforced Options
 
-```text
-projectc-token-2022/
-├── Anchor.toml
-├── Cargo.toml
-├── package.json
-├── migrations/
-│   └── deploy.ts
-├── programs/
-│   ├── business-id-factory/
-│   ├── stablecoin-ramp/
-│   ├── transfer-hook/
-│   └── whitelist-manager/
-├── deployments/
-│   └── *.json
-└── tests/
-    ├── stablecoin-ramp.ts
-    └── transfer-hook.ts
-```
+Solana 侧也需要保存对每条远端路径的执行参数，比如：
 
-## 环境要求
+- 发送到 EVM 时 EVM 接收侧所需 gas
+- 如果将来有 compose，还可以区分 send / sendAndCall
 
-- Rust stable
-- Solana CLI
-- Anchor CLI
-- Node.js
-- `pnpm` 或 `npm`
+它不是“业务参数”，而是 LayerZero 消息执行参数。
 
-## 安装依赖
+## 3. Solana 侧核心组件
+
+### 3.1 `programs/oft`
+
+核心 program 在 [`programs/oft/src/lib.rs`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/programs/oft/src/lib.rs)。
+
+主要入口有：
+
+- `init_oft`
+- `set_oft_config`
+- `set_peer_config`
+- `send`
+- `lz_receive`
+- `lz_receive_types`
+
+### 3.2 `init_oft`
+
+[`init_oft.rs`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/programs/oft/src/instructions/init_oft.rs) 负责：
+
+- 创建 `oft_store`
+- 绑定目标 `token_mint`
+- 设置 `shared_decimals`
+- 注册 OApp 到 LayerZero endpoint
+- 创建 `lz_receive_types_accounts`
+
+在当前定制版里，最重要的变化是：
+
+- `oft_store` 基于 `token_mint` 推导
+- 不再创建也不再依赖 `token_escrow`
+
+### 3.3 `send`
+
+[`send.rs`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/programs/oft/src/instructions/send.rs) 是 Solana 源链发送逻辑。
+
+它做的事情是：
+
+1. 检查 pause 状态
+2. 根据 decimals / sharedDecimals 做金额换算
+3. 检查 rate limiter
+4. 从用户 token account 执行 `burn`
+5. 通过 LayerZero endpoint 发送消息
+
+这里有两个关键点：
+
+- 本金路径是纯 `burn`
+- 由于 `oft_fee = 0`，没有额外 fee 资产路径
+
+### 3.4 `lz_receive`
+
+[`lz_receive.rs`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/programs/oft/src/instructions/lz_receive.rs) 是 Solana 目标链接收逻辑。
+
+它做的事情是：
+
+1. 验证 peer 和 sender
+2. 调用 endpoint `clear`
+3. 把消息里的共享精度金额换回本地精度
+4. 检查 inbound / outbound limiter
+5. 通过当前 mint authority 执行 `mint_to`
+6. 如有 compose，再发送 compose message
+
+这里的核心事实是：
+
+- 接收时真正给用户到账的是一次本地 mint
+- 所以 mint authority 必须允许 OFT 路径铸币
+
+## 4. 为什么能兼容原扩展 mint
+
+你原来的稳定币 mint 带有：
+
+- `transfer-hook`
+- `pausable`
+- `permanent-delegate`
+
+官方示例最初卡住的根因，不是 OFT 理论不支持这些扩展，而是：
+
+- 官方 Native 路径默认仍围绕 `token_escrow`
+- 账户布局和初始化方式更偏向标准 token account
+
+现在这套实现之所以能兼容，是因为我们做了两类调整：
+
+### 4.1 移除 Native 模式下的 `token_escrow`
+
+当前设计里：
+
+- Native OFT 本金路径只需要 `burn / mint`
+- 不需要 escrow 托管本金
+
+所以程序层把 `token_escrow` 从 Native 路径中移除了。
+
+这样做后：
+
+- 跨链本金不依赖中间托管账户
+- 也避免了扩展 token account 初始化上的兼容问题
+
+### 4.2 用 multisig 承接 mint authority
+
+当前要求是：
+
+- mint authority 不直接给某个人
+- 也不强制必须只给 `oft_store`
+- 而是给一个 `1-of-n` SPL multisig
+
+这个 multisig 里至少包括：
+
+- `oft_store`
+- 部署者钱包或额外发行方钱包
+
+这样实现后：
+
+- OFT 接收路径可以 mint
+- 原发行方钱包仍然可以继续直接铸币
+
+这就是“跨链可 mint”和“发行方保留铸币能力”同时成立的原因。
+
+## 5. 跨链时序
+
+### 5.1 `Solana -> Sepolia`
+
+1. 用户在 Solana 调用 `send`
+2. OFT program 从用户 ATA burn token
+3. LayerZero Endpoint 发送消息
+4. Sepolia OFT 接收消息
+5. EVM 侧 `_credit` 执行
+6. Sepolia 上 mint token 给目标地址
+
+### 5.2 `Sepolia -> Solana`
+
+1. 用户在 Sepolia 调用 OFT `send`
+2. EVM 侧 `_debit` 执行并 burn
+3. LayerZero 发送消息
+4. Solana `lz_receive` 收到消息
+5. 校验 peer、nonce、path config
+6. 根据 mint authority 执行 `mint_to`
+7. 用户在 Solana ATA 收到 token
+
+## 6. 关键账户与数据关系
+
+### 6.1 `token_mint`
+
+这是你的原稳定币 mint，本项目不是新建一枚跨链专用 token，而是直接复用这枚 mint。
+
+### 6.2 `oft_store`
+
+记录 OFT 主状态：
+
+- `token_mint`
+- `ld2sd_rate`
+- `admin`
+- `paused`
+- `endpoint_program`
+- bump
+
+### 6.3 `peer`
+
+按 `["Peer", oft_store, remote_eid]` 派生，记录：
+
+- remote peer address
+- enforced options
+- limiter
+- fee bps
+
+### 6.4 `mintAuthority`
+
+当前链上实际配置为 SPL multisig。它既服务于：
+
+- OFT 接收路径 mint
+- 发行方继续铸币
+
+## 7. 工程文件
+
+### 7.1 脚本
+
+- [`deployDevnet.ts`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/scripts/layerzero/deployDevnet.ts)
+  - 初始化 `oft_store`
+  - 创建 multisig
+  - 切换 mint / freeze authority
+- [`wireDevnetToSepolia.ts`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/scripts/layerzero/wireDevnetToSepolia.ts)
+  - 初始化 path config
+  - 设置 Sepolia peer
+  - 设置 enforced options
+  - 初始化 inbound nonce
+- [`sendDevnetToSepolia.ts`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/scripts/layerzero/sendDevnetToSepolia.ts)
+  - 发起 Solana -> Sepolia 发送
+  - 轮询 EVM 余额验证到账
+- [`utils.ts`](/Users/guyuxiang/Documents/omnichain/projectc-oft-solana/scripts/layerzero/utils.ts)
+  - 部署文件读写
+  - 跨仓 deployment 读取
+  - 调用 `hardhat` task
+
+### 7.2 脚本库
+
+- `scripts/layerzero/lib/solanaRuntime.ts`
+  - Solana 连接、deployment、优先费和 lookup table
+- `scripts/layerzero/lib/nativeOft.ts`
+  - Native OFT PDA、quote、send helper
+- `scripts/layerzero/lib/sendSolana.ts`
+  - 发送流程高层封装
+- `scripts/layerzero/lib/multisig.ts`
+  - mint authority multisig 创建和校验
+- `scripts/layerzero/lib/solanaUtils.ts`
+  - 数值换算、authority 校验、graph 解析
+
+### 7.3 部署产物
+
+- `deployments/solana-testnet/OFT.json`
+
+记录：
+
+- `programId`
+- `mint`
+- `mintAuthority`
+- `oftStore`
+- `remote`
+
+这个文件既是部署结果，也是后续 wiring / send 的默认输入。
+
+## 8. 实际工程流程
+
+### 8.1 编译
 
 ```bash
-pnpm install
-```
-
-## 构建
-
-```bash
+npm install
 anchor build
+npm run compile:hardhat
 ```
 
-## 部署流程
-
-### 1. 部署四个 program
+### 8.2 部署并初始化 OFT
 
 ```bash
-anchor build
-anchor deploy --program-name whitelist_manager
-anchor deploy --program-name business_id_factory
-anchor deploy --program-name stablecoin_ramp
-anchor deploy --program-name transfer_hook
+SOLANA_MINT=<your_token_2022_mint> \
+npm run lz:deploy:devnet
 ```
 
-### 2. 运行 migration
+这一步会：
+
+1. 复用现有 mint
+2. 创建 `oft_store`
+3. 创建 `1-of-n` mint authority multisig
+4. 把 mint / freeze authority 切到该 multisig
+5. 写入本地 deployment 文件
+
+### 8.3 配置通向 Sepolia 的路径
 
 ```bash
-anchor migrate
+SEPOLIA_OFT_ADDRESS=<sepolia_proxy> \
+npm run lz:wire:sepolia
 ```
 
-当前 [migrations/deploy.ts](/usr/src/rust/projectc-token-2022/migrations/deploy.ts) 会执行这些动作：
+这一步会：
 
-- 初始化共享白名单
-- 把部署者 wallet 加入 wallet 白名单
-- 把 `WHITELIST_OWNERS` 中的钱包加入 wallet 白名单
-- 初始化 `business-id-factory`
-- 初始化 `stablecoin-ramp` config
-- 创建 `GLUSD` / `GLSGD` 两个 Token-2022 mint
-- 为每个 mint 初始化：
-  - `TransferHook`
-  - `PausableConfig`
-  - `PermanentDelegate`
-- 为每个 mint 初始化 `ExtraAccountMetaList`
-- 为每个 mint 在 `stablecoin-ramp` 注册 `TokenConfig` 和 `vault`
-- 为白名单钱包自动创建对应 ATA，并把这些 ATA 加入 transfer-hook 白名单
-- 输出 `deployments/*.json` manifest
+1. 执行 `lz:oft:solana:init-config`
+2. 写入 EVM peer
+3. 写入 `Solana -> EVM` enforced options
+4. 初始化 inbound nonce
 
-如果你想在迁移时附带额外白名单钱包：
+### 8.4 从 Solana 发到 Sepolia
 
 ```bash
-WHITELIST_OWNERS=addr1,addr2,addr3 anchor migrate
+SEPOLIA_RECIPIENT=<evm_receiver> \
+AMOUNT=1 \
+npm run lz:send:sepolia
 ```
 
-这里传的是 wallet 地址，不是 ATA。脚本会自动：
+## 9. 设计取舍
 
-- 把 wallet 地址加入 ramp 白名单
-- 为这些 wallet 创建对应 ATA
-- 把 ATA 加入 transfer-hook 白名单
+### 9.1 为什么移除 `token_escrow`
 
-## Migration 输出
+因为当前模式是 Native OFT 的 `burn / mint`。对本金路径来说：
 
-每次执行 `anchor migrate` 后，`deployments/*.json` 会记录：
+- 发送时 burn
+- 接收时 mint
 
-- 四个 program 地址
-- 共享 `whiteList`
-- `factoryState`
-- 固定 `businessIdRecord`
-- `rampConfig`
-- `vaultAuthority`
-- 每个 mint 的：
-  - mint 地址
-  - treasury ATA
-  - extra account meta list
-  - ramp token config
-  - ramp vault
+既然不做 lock / unlock，本金就不需要 escrow。
 
-## 测试
+### 9.2 为什么 fee 固定为 0
 
-当前有两个集成测试文件：
+因为当前目标是先把稳定币跨链主路径跑通，而且业务上没有额外 OFT fee 需求。于是：
 
-- `tests/transfer-hook.ts`
-- `tests/stablecoin-ramp.ts`
+- `oft_fee = 0`
+- 不再引入 fee 托管或提取路径
 
-### `tests/transfer-hook.ts`
+这样可以让程序结构更清晰，也减少扩展 mint 下不必要的复杂度。
 
-覆盖：
+### 9.3 为什么还保留极薄的 Hardhat task 层
 
-- 共享白名单初始化
-- 多 mint 复用同一白名单
-- transfer hook 白名单校验
-- pause / resume
-- permanent delegate transfer / burn
+当前主逻辑已经迁到 `scripts/layerzero/lib/`。但 `init-config` 这一步仍复用 LayerZero 官方 Hardhat wiring 能力，因为它属于协议层初始化，而不是业务层发送逻辑。  
+所以现在 `tasks/` 只保留了跑 `init-config` 所需的最小桥接层。
 
-### `tests/stablecoin-ramp.ts`
+## 10. 与业务 program 的关系
 
-覆盖：
+### 10.1 `transfer-hook`
 
-- 初始化 whitelist / business-id-factory / stablecoin-ramp config
-- 注册 mint 并为 ramp vault 注入流动性
-- `request_on_ramp` 内部 CPI 调业务 ID 工厂
-- `approve_on_ramp` 放币到用户 ATA
-- `request_off_ramp` 内部再次生成业务 ID
-- 固定 `BusinessIdRecord` 被覆盖
-- 旧 `RampRequest.business_id` 仍然保留历史业务号
-- `approve_off_ramp` 对自发行币执行 burn
+它仍然负责 Solana 本地 token 转账限制。OFT 只是新增了一条跨链 mint / burn 路径，不会替代本地白名单控制。
 
-### 运行全部测试
+### 10.2 `stablecoin-ramp`
 
-```bash
-anchor test --skip-local-validator --skip-build --skip-deploy
-```
+它仍然负责出入金业务，不负责 LayerZero 消息协议。
 
-### 只运行 ramp 测试
+### 10.3 `whitelist-manager`
 
-```bash
-anchor test --skip-local-validator --skip-build --skip-deploy --run tests/stablecoin-ramp.ts
-```
+它仍然是本地权限数据来源，与 OFT 是否发消息没有直接耦合。
 
-### 只运行 transfer-hook 测试
+换句话说：
 
-```bash
-anchor test --skip-local-validator --skip-build --skip-deploy --run tests/transfer-hook.ts
-```
+- OFT 解决“跨链如何移动”
+- 业务 program 解决“本地业务如何治理”
 
-## Stablecoin Ramp 使用流程
+## 11. 常见问题
 
-### On-ramp
+### 11.1 为什么不是官方原版 `oft_solana`
 
-1. 客户端准备一个新的 `request` 账户
-2. 调用 `stablecoin-ramp.request_on_ramp(amount)`
-3. 程序内部 CPI 调 `business-id-factory.reserve_business_id`
-4. 固定 `BusinessIdRecord` 被更新为最新 `ref_id`
-5. `RampRequest.business_id` 保存这次请求对应的业务号
-6. 管理员调用 `approve_on_ramp` 或 `reject_on_ramp`
+因为原版 Native 路径仍带有对 `token_escrow` 的结构性依赖，而你的目标是：
 
-### Instant on-ramp
+- burn / mint
+- 无 escrow
+- fee = 0
+- 兼容扩展 mint
 
-1. 管理员调用 `instant_on_ramp(amount)`
-2. 程序内部生成业务号
-3. 直接从 vault 放币到用户 ATA
-4. `RampRequest` 直接记为 `RequestApproved`
+所以这里做了定制版 Native OFT。
 
-### Off-ramp
+### 11.2 为什么还需要 mint authority multisig
 
-1. 用户调用 `request_off_ramp(amount)`
-2. 程序内部生成新的业务号
-3. 用户 token 先转入 vault
-4. 管理员调用 `approve_off_ramp` 或 `reject_off_ramp`
-5. 若 `is_self_issued = true`，审批时对 vault 中对应数量执行 burn
+因为 `lz_receive` 本质上要调用 `mint_to`。如果没有可用的 mint authority，消息到了也无法到账。
 
-## 生产注意事项
+### 11.3 为什么发送脚本要轮询 EVM 余额
 
-当前版本更偏向业务流程原型，不建议直接按正式生产资产上线，主要原因：
+因为真正业务结果是目标链到账，不是本地 send 成功。脚本轮询目标余额是为了验证完整跨链闭环，而不是只验证源链 tx 成功。
 
-- `BusinessIdRecord` 是固定 PDA，只保存最近一次业务号
-- `FactoryState` 使用单账户 `Vec` 维护计数器，长期增长需要扩容策略
-- `whitelist-manager` 仍是单账户 `Vec<Pubkey>` 结构
-- `mint authority`、`pause authority`、`permanent delegate`、`ramp authority` 默认都是 deployer
+## 12. 和 EVM 仓库的关系
 
-如果要生产化，建议至少补这几项：
+Solana 侧默认会读取：
 
-- 多签管理关键 authority
-- 为业务 ID 工厂做计数器分片或 `realloc` 方案
-- 给 ramp 请求和业务号建立更完整的审计索引
-- 明确区分 wallet 白名单和 token account 白名单的治理流程
+- `../projectc-oft-evm/deployments/sepolia/OFT.json`
 
-## License
+EVM 侧默认会读取：
 
-MIT
+- `../projectc-oft-solana/deployments/solana-testnet/OFT.json`
+
+这样两边通过 deployment 文件形成一个稳定的工程闭环：
+
+- 先部署
+- 再 wiring
+- 再 send
+
+不需要每次手工重复录入所有地址。

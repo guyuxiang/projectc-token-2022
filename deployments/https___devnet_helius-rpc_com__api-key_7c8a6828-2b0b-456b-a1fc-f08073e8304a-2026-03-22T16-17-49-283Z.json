@@ -1,0 +1,51 @@
+{
+  "cluster": "https___devnet_helius-rpc_com__api-key_7c8a6828-2b0b-456b-a1fc-f08073e8304a",
+  "programs": {
+    "transferHook": "6EW124q8HaQb4DCkFoP1WZ5HC8Mt8HfSzvxV66oN2ezF",
+    "whitelistManager": "DtYLNr7A4wYkjDJqMo4Vq29v8pC8gtsspoyBdZFkUqyT",
+    "businessIdFactory": "3Qf7mADvu1G3cLRdQWm5wfSQP8tayogNL7yi4Rh5KbmZ",
+    "stablecoinRamp": "Gov4oxrHdeDw7XihXKYRzq67aoJCrfhzumybUfDqHGmF"
+  },
+  "sharedAccounts": {
+    "whiteList": "GdVDB9nEb8rgj6Wxn67iwJciYL4mKZjj1nwDeeKHDbJE",
+    "factoryState": "FSvFrUtyYMMqs39gKbQ3fQ4TR4D7kPPkWT2rrNpnVvBo",
+    "businessIdRecord": "7F1XCwyYKEVHUoFSCHiNdk9A9y8GDGeEBFHKywfR66uY",
+    "rampConfig": "EyfGfM5dNXUMVnaw3v4T2HVA8V3CTNZCBZaM4MsyBEnr",
+    "vaultAuthority": "6D5taKAXMRPx8UDpfRPEFCvDkBAZTdR2ZS3B3UL8R55d"
+  },
+  "deployedAt": "2026-03-22T16:17:49.284Z",
+  "tokens": [
+    {
+      "name": "Global USD",
+      "symbol": "GLUSD",
+      "decimals": 6,
+      "initialSupplyUi": 0,
+      "rampLiquidityUi": 0,
+      "isSelfIssued": true,
+      "mint": "8KR5GRvN5PHe3y1hXA2ELWvQeKCSvGZ1ffPs4CnXjMSt",
+      "pauseAuthority": "9cd7T7sCuDGftuByPs9hAHiSWUXHnLvGpY56Yn9pWyFP",
+      "permanentDelegate": "9cd7T7sCuDGftuByPs9hAHiSWUXHnLvGpY56Yn9pWyFP",
+      "treasuryTokenAccount": "EkAFenaG3XBQa62X2J6Csnf4MRcQqyeFkLo6yutJmC8x",
+      "extraAccountMetaList": "3o3HxwhasDmPm2EcAMosiax87eagTF3Q7jCjvqWTnidJ",
+      "whiteList": "GdVDB9nEb8rgj6Wxn67iwJciYL4mKZjj1nwDeeKHDbJE",
+      "rampTokenConfig": "HEe7EPaZGrbhPUtMxUMJk7bx9fJRuXwKpd5koFi8fhgv",
+      "rampVault": "6TAu8NGyfH5cxrgLV1HLCdvgQrK6ADJzAkiXfFvunu8k"
+    },
+    {
+      "name": "Global SGD",
+      "symbol": "GLSGD",
+      "decimals": 6,
+      "initialSupplyUi": 0,
+      "rampLiquidityUi": 0,
+      "isSelfIssued": true,
+      "mint": "4YNpvH4RzaqiM9W6rS8wKJKba1eQAkwdhKVjZdQmGsdp",
+      "pauseAuthority": "9cd7T7sCuDGftuByPs9hAHiSWUXHnLvGpY56Yn9pWyFP",
+      "permanentDelegate": "9cd7T7sCuDGftuByPs9hAHiSWUXHnLvGpY56Yn9pWyFP",
+      "treasuryTokenAccount": "5ex8nE3dMhXnjb6EH5MkzMZp212Ywnxw71epveTp7vAd",
+      "extraAccountMetaList": "9gSaf1ESjx2nV691LqDBeQ2BTVTregAQkGmWxaQcxbSK",
+      "whiteList": "GdVDB9nEb8rgj6Wxn67iwJciYL4mKZjj1nwDeeKHDbJE",
+      "rampTokenConfig": "GeNQr2GeGgk5Nxp15kCXG2Mr3uqYGiriJvFzKzK3Gqpe",
+      "rampVault": "2rEoArkJfwkUshX3chMmu9TnRCdgaMUWgWyZuyWHc9Md"
+    }
+  ]
+}

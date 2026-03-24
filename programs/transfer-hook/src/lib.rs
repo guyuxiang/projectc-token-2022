@@ -9,7 +9,7 @@ pub mod instructions;
 
 use constants::EXTRA_ACCOUNT_METAS_SEED;
 
-declare_id!("BPu1HGsLmA3PEPW4rCW7fUYYKPNQ1vAPWytvBwr5nuM3");
+declare_id!("6EW124q8HaQb4DCkFoP1WZ5HC8Mt8HfSzvxV66oN2ezF");
 
 #[derive(Accounts)]
 pub struct InitializeExtraAccountMetaList<'info> {
